@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>stat</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="logo" aria-hidden="true"></span>
+    <h1>stat</h1>
+    <span id="status" class="pill" role="status"></span>
+  </div>
+  <p id="runMeta" class="meta"></p>
+  <div class="actions">
+    <button id="exportCsv" type="button" class="btn" hidden>Export CSV</button>
+    <button id="themeToggle" type="button" class="btn ghost" aria-label="Theme">Theme: auto</button>
+  </div>
+</header>
+
+<main>
+  <section class="toolbar" aria-label="Chart controls">
+    <div id="rangeButtons" class="seg" role="group" aria-label="Time range">
+      <button type="button" data-range="60000">1 min</button>
+      <button type="button" data-range="300000">5 min</button>
+      <button type="button" data-range="900000">15 min</button>
+      <button type="button" data-range="run">Whole run</button>
+    </div>
+    <label class="check"><input type="checkbox" id="showBand" checked> Show min-max range</label>
+    <button id="resetZoom" type="button" class="btn ghost" hidden>Reset zoom</button>
+    <span id="viewNote" class="muted"></span>
+  </section>
+
+  <section id="cards" class="cards" aria-label="Whole-run summary"></section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Processes</h2>
+      <span class="muted">Whole-run figures. Untick a process to hide it from the charts.</span>
+    </div>
+    <div class="table-wrap">
+      <table id="procTable">
+        <thead>
+          <tr>
+            <th scope="col"><span class="sr-only">Show</span></th>
+            <th scope="col">Process</th>
+            <th scope="col" class="num">PID</th>
+            <th scope="col">Source</th>
+            <th scope="col">Status</th>
+            <th scope="col" class="num">Samples</th>
+            <th scope="col" class="num">CPU avg</th>
+            <th scope="col" class="num">CPU p95</th>
+            <th scope="col" class="num">CPU max</th>
+            <th scope="col" class="num">Cores max</th>
+            <th scope="col" class="num">Working set now / max</th>
+            <th scope="col" class="num">Private start &rarr; now</th>
+            <th scope="col" class="num">Private max</th>
+            <th scope="col" class="num">Threads max</th>
+            <th scope="col" class="num">Handles max</th>
+            <th scope="col" class="num">I/O read total</th>
+            <th scope="col" class="num">I/O write total</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p id="procEmpty" class="empty">No processes are being monitored yet.</p>
+    </div>
+  </section>
+
+  <section id="charts" class="charts" aria-label="Charts"></section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Events</h2>
+      <span id="eventCount" class="muted"></span>
+    </div>
+    <ol id="events" class="events"></ol>
+  </section>
+</main>
+
+<footer id="footer" class="footer"></footer>
+
+<script src="chart.umd.min.js"></script>
+<!--STAT:DATA-->
+<script src="app.js"></script>
+</body>
+</html>
