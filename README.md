@@ -62,17 +62,18 @@ Exit codes: `0` success, `1` bad arguments, `2` dashboard port or report file un
 
 ## Live dashboard
 
-The dashboard always runs while `stat.exe` is monitoring. It shows:
+The dashboard always runs while `stat.exe` is monitoring. It is styled like an engineering pad: traces drawn on millimetre graph paper, with a status lamp and an elapsed-time clock at the top. It shows:
 
-- **Summary cards:** duration, running processes, peak CPU, peak working set, peak private memory and total I/O.
-- **Processes table:** per-process CPU average, p95 and max, memory, threads, handles and I/O totals. Untick a process to hide it from the charts.
-- **Charts:** CPU, working set, private memory, threads, handles, and I/O read, write and other. Hover over any chart and every chart shows a crosshair and the values for all processes at that same moment; drag across any chart to zoom all of them; double-click to reset.
+- **CPU strip:** a wide chart where each process's trace ends in a pen labelled with its latest reading.
+- **Processes table:** the key for every chart. Each row shows the process's ink colour and status lamp, CPU now, average, p95 and peak, working set, private memory and its change since the start, threads, handles and I/O totals. Untick a process to hide it from all charts.
+- **Small charts:** working set and private memory, threads and handles, and I/O read, write and other.
+- **Hover and zoom:** hover over any chart and every chart shows a crosshair and the values for all processes at that moment; drag across any chart to zoom all of them; double-click to reset.
 - **Time range:** last 1, 5 or 15 minutes, or the whole run.
-- **Events:** processes found, exited or inaccessible, and port listener changes.
+- **Logbook:** processes found, exited or inaccessible, and port listener changes. Warnings are marked in red.
 
 Several browsers can watch at once. A browser opened late still gets the history collected so far.
 
-Light and dark themes follow the system setting; the **Theme** button overrides it.
+The light theme is green engineering paper and the dark theme is blueprint blue. They follow the system setting; the **Theme** button overrides it.
 
 ## HTML report
 
@@ -160,4 +161,7 @@ Project layout:
 
 ## Third-party software
 
-The dashboard and reports include [Chart.js](https://www.chartjs.org/) 4.4.7, (c) Chart.js Contributors, MIT licence. See `src/stat/web/vendor/LICENSE-chartjs.md`.
+The dashboard and reports include:
+
+- [Chart.js](https://www.chartjs.org/) 4.4.7, (c) Chart.js Contributors, MIT licence. See `src/stat/web/vendor/LICENSE-chartjs.md`.
+- The [B612](https://github.com/polarsys/b612) typeface, (c) The B612 Project Authors, SIL Open Font License 1.1. See `src/stat/web/vendor/fonts/LICENSE-B612.txt`.

@@ -28,6 +28,8 @@
     <EmbeddedResource Include="web\app.css" LogicalName="web/app.css" />
     <EmbeddedResource Include="web\app.js" LogicalName="web/app.js" />
     <EmbeddedResource Include="web\vendor\chart.umd.min.js" LogicalName="web/chart.umd.min.js" />
+    <EmbeddedResource Include="web\vendor\fonts\b612-400.woff2" LogicalName="web/fonts/b612-400.woff2" />
+    <EmbeddedResource Include="web\vendor\fonts\b612-700.woff2" LogicalName="web/fonts/b612-700.woff2" />
   </ItemGroup>
 
 </Project>

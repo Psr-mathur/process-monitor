@@ -128,6 +128,8 @@ namespace Stat
                         Send(stream, 200, "text/html; charset=utf-8", Assets.LivePage(), head: head); break;
                     case "/app.css":
                         Send(stream, 200, "text/css; charset=utf-8", Assets.AppCss, head: head); break;
+                    case "/fonts.css":
+                        Send(stream, 200, "text/css; charset=utf-8", Assets.FontCss, head: head); break;
                     case "/app.js":
                         Send(stream, 200, "text/javascript; charset=utf-8", Assets.AppJs, head: head); break;
                     case "/chart.umd.min.js":
@@ -224,7 +226,7 @@ namespace Stat
             sb.Append("Cache-Control: no-store\r\n");
             sb.Append("X-Content-Type-Options: nosniff\r\n");
             sb.Append("Referrer-Policy: no-referrer\r\n");
-            sb.Append("Content-Security-Policy: default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'\r\n");
+            sb.Append("Content-Security-Policy: default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; frame-ancestors 'none'\r\n");
             sb.Append("Connection: close\r\n");
             sb.Append(extraHeaders);
             sb.Append("\r\n");

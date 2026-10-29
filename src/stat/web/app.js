@@ -7,16 +7,19 @@
   const METRIC_COUNT = 8;
   const RECENT_KEEP_MS = 15 * 60 * 1000 + 30 * 1000;
 
+  // CPU is the recorder strip (pens labelled); the rest are small multiples grouped by kind.
   const CHARTS = [
-    { id: 'cpu', m: M.cpu, title: 'CPU', unit: '% of total machine capacity', fmt: v => fmtPct(v) },
-    { id: 'ws', m: M.ws, title: 'Working set', unit: 'physical memory in use', fmt: v => fmtMB(v) },
-    { id: 'priv', m: M.priv, title: 'Private memory', unit: 'committed, not shared', fmt: v => fmtMB(v) },
-    { id: 'threads', m: M.threads, title: 'Threads', unit: 'count', fmt: v => fmtInt(v) },
-    { id: 'handles', m: M.handles, title: 'Handles', unit: 'count', fmt: v => fmtInt(v) },
-    { id: 'ioR', m: M.ioR, title: 'I/O read', unit: 'per second, includes cached and network I/O', fmt: v => fmtRate(v) },
-    { id: 'ioW', m: M.ioW, title: 'I/O write', unit: 'per second, includes cached and network I/O', fmt: v => fmtRate(v) },
-    { id: 'ioO', m: M.ioO, title: 'I/O other', unit: 'per second, non read/write operations', fmt: v => fmtRate(v) },
+    { id: 'cpu', m: M.cpu, title: 'CPU', unit: '% of total machine capacity', fmt: v => fmtPct(v), hero: true },
+    { id: 'ws', m: M.ws, title: 'Working set', unit: 'physical memory in use', fmt: v => fmtMB(v), group: 'mem' },
+    { id: 'priv', m: M.priv, title: 'Private memory', unit: 'committed, not shared', fmt: v => fmtMB(v), group: 'mem' },
+    { id: 'threads', m: M.threads, title: 'Threads', unit: 'count', fmt: v => fmtInt(v), group: 'obj' },
+    { id: 'handles', m: M.handles, title: 'Handles', unit: 'open kernel handles', fmt: v => fmtInt(v), group: 'obj' },
+    { id: 'ioR', m: M.ioR, title: 'I/O read', unit: 'per second, cached and network included', fmt: v => fmtRate(v), group: 'io' },
+    { id: 'ioW', m: M.ioW, title: 'I/O write', unit: 'per second, cached and network included', fmt: v => fmtRate(v), group: 'io' },
+    { id: 'ioO', m: M.ioO, title: 'I/O other', unit: 'per second, neither read nor write', fmt: v => fmtRate(v), group: 'io' },
   ];
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const FONT = '"B612", "Segoe UI", system-ui, sans-serif';
 
   const state = {
     mode: 'live',
@@ -32,8 +35,17 @@
     hidden: new Set(),
     showBand: true,
     connected: false,
-    lastTick: 0,
+    lastTick: 0,           // server time of the latest tick
+    lastTickAt: 0,         // browser time it arrived, to run the clock between ticks
   };
+
+  // Theme colours read once per render rather than per canvas frame.
+  let C = {};
+  function readColors() {
+    const v = n => cssVar('--' + n);
+    C = { paper: v('paper'), gridMinor: v('grid-minor'), gridMajor: v('grid-major'), rule: v('rule'), ink: v('ink'),
+      ink2: v('ink-2'), muted: v('muted'), markup: v('markup'), band: parseFloat(v('band-alpha')) || 0.2 };
+  }
 
   const charts = new Map();  // id -> Chart
   const $ = id => document.getElementById(id);
@@ -51,18 +63,16 @@
     return pad(p.h) + ':' + pad(p.mi) + (withSeconds === false ? '' : ':' + pad(p.s));
   }
   function fmtDate(t) { const p = partsOf(t); return p.y + '-' + pad(p.mo) + '-' + pad(p.d); }
-  function fmtDateTime(t) { return fmtDate(t) + ' ' + fmtTime(t); }
-  function fmtStamp(t) { const p = partsOf(t); return fmtDate(t) + ' ' + fmtTime(t) + '.' + pad(p.ms, 3); }
-  function fmtDuration(ms) {
-    let s = Math.max(0, Math.round(ms / 1000));
+  function fmtLongDate(t) { const p = partsOf(t); return p.d + ' ' + MONTHS[p.mo - 1] + ' ' + p.y; }
+  function fmtClock(ms) {
+    let s = Math.max(0, Math.floor(ms / 1000));
     const d = Math.floor(s / 86400); s -= d * 86400;
     const h = Math.floor(s / 3600); s -= h * 3600;
     const m = Math.floor(s / 60); s -= m * 60;
-    if (d) return d + 'd ' + h + 'h ' + m + 'm';
-    if (h) return h + 'h ' + m + 'm ' + s + 's';
-    if (m) return m + 'm ' + s + 's';
-    return s + 's';
+    return (d ? d + 'd ' : '') + pad(h) + ':' + pad(m) + ':' + pad(s);
   }
+  function fmtDateTime(t) { return fmtDate(t) + ' ' + fmtTime(t); }
+  function fmtStamp(t) { const p = partsOf(t); return fmtDate(t) + ' ' + fmtTime(t) + '.' + pad(p.ms, 3); }
   function utcLabel() {
     const o = (state.run && state.run.utcOffsetMinutes) || 0;
     const sign = o < 0 ? '-' : '+', a = Math.abs(o);
@@ -280,9 +290,9 @@
       const ctx = chart.ctx, area = chart.chartArea;
       const hx = chart.$statHoverX;
       if (hx != null && !drag && hx >= area.left && hx <= area.right) {
-        const x = hx;
+        const x = Math.round(hx) + 0.5;
         ctx.save();
-        ctx.strokeStyle = cssVar('--axis');
+        ctx.strokeStyle = C.markup;
         ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(x, area.top); ctx.lineTo(x, area.bottom); ctx.stroke();
         ctx.restore();
@@ -290,12 +300,113 @@
       if (drag && drag.chart === chart) {
         const x0 = Math.max(area.left, Math.min(drag.x0, drag.x1)), x1 = Math.min(area.right, Math.max(drag.x0, drag.x1));
         ctx.save();
-        ctx.fillStyle = withAlpha(cssVar('--accent'), 0.12);
-        ctx.strokeStyle = cssVar('--accent');
+        ctx.fillStyle = withAlpha(C.markup, 0.12);
+        ctx.strokeStyle = C.markup;
+        ctx.setLineDash([4, 3]);
         ctx.fillRect(x0, area.top, x1 - x0, area.bottom - area.top);
         ctx.strokeRect(x0 + 0.5, area.top + 0.5, x1 - x0 - 1, area.bottom - area.top - 1);
         ctx.restore();
       }
+    },
+  };
+
+  // Millimetre paper: five minor divisions between each pair of major gridlines.
+  const paperPlugin = {
+    id: 'statPaper',
+    beforeDraw(chart) {
+      const a = chart.chartArea, sx = chart.scales.x, sy = chart.scales.y;
+      if (!a || !sx || !sy) return;
+      const ctx = chart.ctx;
+      const minors = (positions, lo, hi) => {
+        const out = [];
+        if (positions.length < 2) return out;
+        const step = (positions[1] - positions[0]) / 5;
+        if (Math.abs(step) < 4) return out;
+        const start = positions[0] - Math.ceil((positions[0] - lo) / step) * step;
+        for (let p = start; p <= hi + 0.5; p += step) {
+          if (!positions.some(q => Math.abs(q - p) < 1)) out.push(p);
+        }
+        return out;
+      };
+      const xs = sx.ticks.map(t => sx.getPixelForValue(t.value));
+      const ys = sy.ticks.map(t => sy.getPixelForValue(t.value)).sort((p, q) => p - q);
+      ctx.save();
+      ctx.strokeStyle = C.gridMinor;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (const x of minors(xs, a.left, a.right)) { const px = Math.round(x) + 0.5; ctx.moveTo(px, a.top); ctx.lineTo(px, a.bottom); }
+      for (const y of minors(ys, a.top, a.bottom)) { const py = Math.round(y) + 0.5; ctx.moveTo(a.left, py); ctx.lineTo(a.right, py); }
+      ctx.stroke();
+      ctx.restore();
+    },
+  };
+
+  /** Last drawable point of a dataset inside the visible x range. */
+  function penIndex(chart, ds) {
+    const min = chart.scales.x.min, max = chart.scales.x.max;
+    for (let i = ds.data.length - 1; i >= 0; i--) {
+      const p = ds.data[i];
+      if (p.x > max) continue;
+      if (p.x < min) return -1;
+      if (p.y != null) return i;
+    }
+    return -1;
+  }
+
+  // Pen tips: a dot where each trace ends; on the CPU strip, the latest reading written beside it.
+  const penPlugin = {
+    id: 'statPen',
+    afterDatasetsDraw(chart) {
+      const ctx = chart.ctx, a = chart.chartArea;
+      const labels = [];
+      chart.data.datasets.forEach((ds, di) => {
+        if (ds.band || !chart.isDatasetVisible(di)) return;
+        const i = penIndex(chart, ds);
+        if (i < 0) return;
+        const el = chart.getDatasetMeta(di).data[i];
+        if (!el) return;
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(el.x, el.y, 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = ds.borderColor;
+        ctx.strokeStyle = C.paper;
+        ctx.lineWidth = 2;
+        ctx.fill(); ctx.stroke();
+        ctx.restore();
+        if (chart.$statLabels) labels.push({ x: el.x, y: el.y, want: el.y, color: ds.borderColor, value: chart.$statFmt(ds.data[i].y), name: ds.label });
+      });
+      if (!labels.length) return;
+
+      // Spread labels vertically so they never overlap, keeping them inside the plot height.
+      const gap = 17;
+      labels.sort((p, q) => p.want - q.want);
+      for (let i = 0; i < labels.length; i++) labels[i].y = Math.max(labels[i].want, i ? labels[i - 1].y + gap : a.top + 6);
+      const overflow = labels[labels.length - 1].y - (a.bottom - 4);
+      if (overflow > 0) {
+        for (let i = labels.length - 1; i >= 0; i--) {
+          labels[i].y = Math.min(labels[i].y - overflow, i < labels.length - 1 ? labels[i + 1].y - gap : Infinity);
+        }
+      }
+
+      const x0 = a.right + 14, maxW = chart.width - x0 - 4;
+      ctx.save();
+      ctx.textBaseline = 'middle';
+      for (const l of labels) {
+        ctx.strokeStyle = C.ink2;
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(l.x + 5, l.want); ctx.lineTo(x0 - 4, l.y); ctx.stroke();
+        ctx.font = '700 12px ' + FONT;
+        ctx.fillStyle = C.ink;
+        ctx.fillText(l.value, x0, l.y);
+        const vw = ctx.measureText(l.value + ' ').width;
+        ctx.font = '12px ' + FONT;
+        ctx.fillStyle = C.ink2;
+        if (chart.$statCompact) continue; // narrow screens: value only; colour and the table identify the pen
+        let name = l.name;
+        while (name.length > 3 && vw + ctx.measureText(name).width > maxW) name = name.slice(0, -2) + '…';
+        if (vw + ctx.measureText(name).width <= maxW) ctx.fillText(name, x0 + vw, l.y);
+      }
+      ctx.restore();
     },
   };
 
@@ -364,39 +475,33 @@
     };
   }
 
-  function ensureChartCards() {
-    const host = $('charts');
+  function ensureFigures() {
+    const host = $('multiples');
     if (host.childElementCount) return;
     for (const def of CHARTS) {
-      const card = document.createElement('article');
-      card.className = 'chart-card';
-      card.innerHTML = '<header><h2></h2><span class="unit"></span></header><div class="chart-box"><canvas role="img"></canvas></div>';
-      card.querySelector('h2').textContent = def.title;
-      card.querySelector('.unit').textContent = def.unit;
-      card.querySelector('canvas').id = 'chart-' + def.id;
-      card.querySelector('canvas').setAttribute('aria-label', def.title + ' over time per process; values are listed in the Processes table.');
-      host.appendChild(card);
+      if (def.hero) continue;
+      const fig = document.createElement('figure');
+      fig.className = def.group;
+      fig.innerHTML = '<figcaption><b></b><span class="unit"></span></figcaption><div class="chart-box"><canvas role="img"></canvas></div>';
+      fig.querySelector('b').textContent = def.title;
+      fig.querySelector('.unit').textContent = def.unit;
+      const canvas = fig.querySelector('canvas');
+      canvas.id = 'chart-' + def.id;
+      canvas.setAttribute('aria-label', def.title + ' over time per process; values are listed in the Processes table.');
+      host.appendChild(fig);
     }
-    const empty = document.createElement('p');
-    empty.className = 'empty';
-    empty.id = 'chartsEmpty';
-    empty.textContent = 'Waiting for the first samples...';
-    host.appendChild(empty);
   }
 
   function renderCharts() {
-    ensureChartCards();
+    ensureFigures();
     const anyData = state.order.some(k => (state.procs.get(k) || {}).n > 0);
-    $('chartsEmpty').hidden = anyData;
-    document.querySelectorAll('.chart-card').forEach(c => { c.hidden = !anyData; });
-    if (!anyData) return;
+    $('waiting').hidden = anyData;
 
     const ext = xExtent();
     const span = ext.max - ext.min;
-    const grid = cssVar('--grid'), axis = cssVar('--axis'), muted = cssVar('--muted'), text = cssVar('--text');
-    const surface = cssVar('--surface'), alpha = parseFloat(cssVar('--band-alpha')) || 0.18;
-    const keys = visibleKeys();
+    const keys = anyData ? visibleKeys() : [];
     let aggregatedAny = false;
+    const heroWidth = $('chart-cpu').parentElement.clientWidth;
 
     for (const def of CHARTS) {
       const datasets = [];
@@ -409,13 +514,13 @@
         if (wantBand && pts.aggregated) {
           datasets.push({ band: true, key: k, data: pts.lo, borderWidth: 0, pointRadius: 0, fill: false, spanGaps: false });
           datasets.push({ band: true, key: k, data: pts.hi, borderWidth: 0, pointRadius: 0, fill: '-1', spanGaps: false,
-            backgroundColor: withAlpha(color, alpha) });
+            backgroundColor: withAlpha(color, C.band) });
         }
         datasets.push({
           key: k, label: labelOf(proc), data: pts.line,
-          borderColor: color, backgroundColor: color, borderWidth: 2,
-          pointRadius: pts.line.length <= 2 ? 3 : 0, pointHoverRadius: 4,
-          pointHoverBackgroundColor: color, pointHoverBorderColor: surface, pointHoverBorderWidth: 2,
+          borderColor: color, backgroundColor: color, borderWidth: def.hero ? 2 : 1.75,
+          pointRadius: 0, pointHoverRadius: 4,
+          pointHoverBackgroundColor: color, pointHoverBorderColor: C.paper, pointHoverBorderWidth: 2,
           spanGaps: false, tension: 0, fill: false,
         });
       }
@@ -425,24 +530,24 @@
         chart = new Chart($('chart-' + def.id), {
           type: 'line',
           data: { datasets },
-          plugins: [crosshairPlugin],
+          plugins: [paperPlugin, crosshairPlugin, penPlugin],
           options: {
             parsing: false, normalized: true, animation: false, responsive: true, maintainAspectRatio: false,
-            // Hover is driven by syncHover(); Chart.js only handles clicks (legend toggles).
+            // Hover is driven by syncHover(); Chart.js only handles clicks.
             events: ['click'],
             interaction: { mode: 'statNearestX', intersect: false },
+            layout: { padding: { top: 6, right: 8 } },
             scales: {
-              x: { type: 'linear', afterBuildTicks: timeTicks, grid: { color: grid }, border: { color: axis }, ticks: { color: muted, maxRotation: 0, autoSkip: false, font: { size: 11 } } },
-              y: { beginAtZero: true, grid: { color: grid }, border: { display: false }, ticks: { color: muted, maxTicksLimit: 6, font: { size: 11 }, callback: v => axisLabel(def.fmt, v) } },
+              x: { type: 'linear', afterBuildTicks: timeTicks, grid: { color: C.gridMajor, tickColor: C.gridMajor }, border: { color: C.ink2 },
+                ticks: { color: C.muted, maxRotation: 0, autoSkip: false, font: { size: 11 } } },
+              y: { beginAtZero: true, grid: { color: C.gridMajor, tickColor: C.gridMajor }, border: { display: false },
+                ticks: { color: C.muted, maxTicksLimit: def.hero ? 7 : 5, font: { size: 11 }, callback: v => axisLabel(def.fmt, v) } },
             },
             plugins: {
-              legend: {
-                position: 'top', align: 'start',
-                labels: { color: text, usePointStyle: true, pointStyle: 'line', boxWidth: 18, font: { size: 11.5 }, filter: (item, data) => !data.datasets[item.datasetIndex].band },
-                onClick: (e, item, legend) => { toggleProcess(legend.chart.data.datasets[item.datasetIndex].key); },
-              },
+              // The Processes table is the key; the CPU strip also labels each pen directly.
+              legend: { display: false },
               tooltip: {
-                backgroundColor: surface, titleColor: muted, bodyColor: text, borderColor: axis, borderWidth: 1,
+                backgroundColor: C.paper, titleColor: C.muted, bodyColor: C.ink, borderColor: C.ink2, borderWidth: 1, cornerRadius: 2,
                 padding: 10, boxWidth: 14, boxHeight: 2, usePointStyle: false, titleFont: { weight: 'normal', size: 11.5 }, bodyFont: { size: 12 },
                 callbacks: {
                   title: items => {
@@ -457,6 +562,8 @@
           },
         });
         chart.$statId = def.id;
+        chart.$statLabels = !!def.hero;
+        chart.$statFmt = def.fmt;
         attachZoom(chart);
         charts.set(def.id, chart);
       } else {
@@ -465,13 +572,17 @@
       chart.options.scales.x.min = ext.min;
       chart.options.scales.x.max = ext.max;
       chart.options.scales.x.ticks.callback = tickFormatter(span);
-      chart.options.plugins.legend.display = keys.length > 1;
+      // Room to the right of the strip for the pen labels.
+      if (def.hero) {
+        chart.$statCompact = heroWidth <= 640;
+        chart.options.layout.padding.right = chart.$statCompact ? 66 : 190;
+      }
       chart.update('none');
     }
 
     const note = [];
-    if (aggregatedAny) note.push('Long run: points are averages over time buckets' + (state.showBand ? '; the shaded band is the min-max range.' : '.'));
-    note.push('Drag across a chart to zoom' + (state.zoom ? ', double-click to reset.' : '.'));
+    if (aggregatedAny) note.push('Each point averages a time bucket' + (state.showBand ? '; the shaded band shows its range.' : '.'));
+    note.push(state.zoom ? 'Double-click a chart to reset the zoom.' : 'Drag across a chart to zoom.');
     $('viewNote').textContent = note.join(' ');
     $('resetZoom').hidden = !state.zoom;
     if (hover.chart) syncHover(); // re-apply after live updates rebuilt the datasets
@@ -491,73 +602,75 @@
     render();
   }
 
-  // ---------------------------------------------------------------- header, cards, table, events
+  // ---------------------------------------------------------------- masthead, roster, logbook
+
+  /** Server time now: the latest tick plus time elapsed since it arrived. */
+  function serverNow() { return state.lastTick ? state.lastTick + (Date.now() - state.lastTickAt) : Date.now(); }
+
+  function renderClock() {
+    const r = state.run;
+    if (!r) return;
+    const finished = state.mode === 'report' || !!r.endedAt;
+    const end = r.endedAt || (state.mode === 'report' ? (state.generatedAt || r.startedAt) : serverNow());
+    $('clock').textContent = fmtClock(end - r.startedAt);
+    $('clockLabel').textContent = finished ? 'recorded' : 'elapsed';
+  }
 
   function renderHeader() {
     const r = state.run;
-    const pill = $('status');
-    if (state.mode === 'report') { pill.className = 'pill stopped'; pill.textContent = 'Report'; }
-    else if (r.endedAt) { pill.className = 'pill stopped'; pill.textContent = 'Stopped'; }
-    else if (state.connected) { pill.className = 'pill live'; pill.textContent = 'Live'; }
-    else { pill.className = 'pill warn'; pill.textContent = 'Reconnecting'; }
+    const lamp = $('lamp'), station = $('stationText');
+    let lampClass = 'lamp', verb;
+    if (state.mode === 'report') verb = 'Report from ';
+    else if (r.endedAt) verb = 'Stopped on ';
+    else if (state.connected) { lampClass += ' on'; verb = 'Recording on '; }
+    else { lampClass += ' warn'; verb = 'Reconnecting to '; }
+    lamp.className = lampClass;
+    station.textContent = verb;
+    const host = document.createElement('b');
+    host.textContent = r.host;
+    station.appendChild(host);
 
-    const meta = $('runMeta');
-    meta.textContent = '';
-    const add = (label, value) => {
-      if (meta.childNodes.length) meta.appendChild(document.createTextNode('  ·  '));
-      meta.appendChild(document.createTextNode(label + ' '));
-      const b = document.createElement('b'); b.textContent = value; meta.appendChild(b);
-    };
-    add('Host', r.host);
-    add('Cores', r.cores);
-    add('Interval', r.interval + ' s');
-    add('Started', fmtDateTime(r.startedAt) + ' ' + utcLabel());
-    if (r.endedAt) add('Ended', fmtDateTime(r.endedAt));
-    if (!r.admin) add('Admin', 'no');
-  }
-
-  function renderCards() {
-    const r = state.run;
-    const procs = state.order.map(k => state.procs.get(k));
-    const end = r.endedAt || state.lastTick || Date.now();
-    const sampled = procs.filter(p => p.n > 0);
-    const peak = (field) => sampled.reduce((best, p) => (p[field] != null && (!best || p[field] > best[field]) ? p : best), null);
-    const pc = peak('cpuMax'), pw = peak('wsMax'), pp = peak('privMax');
-    const readTotal = procs.reduce((s, p) => s + (p.ioReadTotal || 0), 0);
-    const writeTotal = procs.reduce((s, p) => s + (p.ioWriteTotal || 0), 0);
-    const running = procs.filter(p => p.status === 'running').length;
-
-    const cards = [
-      ['Duration', fmtDuration(end - r.startedAt), r.endedAt ? 'monitoring finished' : 'monitoring'],
-      ['Processes', running + (r.endedAt ? ' running at end' : ' running'), procs.length + ' seen in total'],
-      ['Peak CPU', pc ? fmtPct(pc.cpuMax) : '-', pc ? fmtCores(coresOf(pc.cpuMax)) + ' cores · ' + labelOf(pc) : ''],
-      ['Peak working set', pw ? fmtMB(pw.wsMax) : '-', pw ? labelOf(pw) : ''],
-      ['Peak private memory', pp ? fmtMB(pp.privMax) : '-', pp ? labelOf(pp) : ''],
-      ['I/O read', fmtBytes(readTotal), fmtBytes(writeTotal) + ' written, all processes'],
-    ];
-    const host = $('cards');
-    if (host.childElementCount !== cards.length) {
-      host.textContent = '';
-      for (let i = 0; i < cards.length; i++) {
-        const c = document.createElement('div');
-        c.className = 'card';
-        c.innerHTML = '<div class="label"></div><div class="value"></div><div class="sub"></div>';
-        host.appendChild(c);
-      }
+    // One plain sentence instead of a strip of labelled fields.
+    const when = t => fmtTime(t) + ' on ' + fmtLongDate(t);
+    let s;
+    if (r.endedAt || state.mode === 'report') {
+      const end = r.endedAt || state.generatedAt || r.startedAt;
+      s = 'Sampled every ' + r.interval + ' s across ' + r.cores + ' logical processors from ' +
+        (fmtDate(r.startedAt) === fmtDate(end) ? fmtTime(r.startedAt) + ' to ' + when(end) : when(r.startedAt) + ' to ' + when(end));
+    } else {
+      s = 'Sampling every ' + r.interval + ' s across ' + r.cores + ' logical processors since ' + when(r.startedAt);
     }
-    cards.forEach((card, i) => {
-      const el = host.children[i];
-      el.querySelector('.label').textContent = card[0];
-      el.querySelector('.value').textContent = card[1];
-      el.querySelector('.sub').textContent = card[2];
-      el.querySelector('.sub').title = card[2];
-    });
+    s += ' (' + utcLabel() + ').';
+    if (!r.admin) s += ' Not running as Administrator, so processes owned by other users may be missing.';
+    $('runSentence').textContent = s;
+    renderClock();
   }
 
-  const STATUS_TEXT = { running: 'Running', exited: 'Exited', 'not-listening': 'Stopped listening', unavailable: 'Unavailable' };
+  /** Latest values for a process: the newest raw sample (live) or the last point of the run (report). */
+  function latestOf(key) {
+    const rec = state.recent.get(key);
+    if (rec && rec.length) return rec[rec.length - 1].slice(1, 1 + METRIC_COUNT);
+    const s = state.series && state.series[key];
+    if (s && s.points.length) {
+      const p = s.points[s.points.length - 1];
+      return p.length > 9 ? p.slice(2, 2 + METRIC_COUNT) : p.slice(1, 1 + METRIC_COUNT);
+    }
+    return null;
+  }
+
+  const STATUS_TEXT = { running: 'running', exited: 'exited', 'not-listening': 'stopped listening', unavailable: 'access lost' };
+  const LAMP_FOR = { running: 'on', exited: 'fault' };
+
+  function signedMB(v) {
+    if (v == null || isNaN(v)) return '-';
+    if (Math.abs(v) < 0.05) return fmtMB(0); // below display precision: no "-0.0 MB"
+    return (v > 0 ? '+' : '−') + fmtMB(Math.abs(v));
+  }
 
   function renderTable() {
     const tbody = document.querySelector('#procTable tbody');
+    const finished = state.mode === 'report' || !!state.run.endedAt;
+    document.querySelectorAll('#procTable .now-label').forEach(th => { th.textContent = finished ? 'at end' : 'now'; });
     $('procEmpty').hidden = state.order.length > 0;
     for (const k of state.order) {
       const p = state.procs.get(k);
@@ -565,48 +678,56 @@
       if (!tr) {
         tr = document.createElement('tr');
         tr.dataset.key = k;
-        for (let i = 0; i < 17; i++) tr.appendChild(document.createElement('td'));
+        for (let i = 0; i < 14; i++) tr.appendChild(document.createElement('td'));
+        const key = document.createElement('label');
+        key.className = 'key';
         const cb = document.createElement('input');
         cb.type = 'checkbox';
         cb.addEventListener('change', () => toggleProcess(k));
-        const key = document.createElement('label');
-        key.className = 'key';
-        const sw = document.createElement('span');
-        sw.className = 'swatch';
-        key.append(cb, sw);
+        const ink = document.createElement('span');
+        ink.className = 'ink';
+        key.append(cb, ink);
         tr.children[0].appendChild(key);
-        [2, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16].forEach(i => tr.children[i].classList.add('num'));
+        tr.children[1].className = 'name-col';
+        tr.children[1].innerHTML = '<span class="key"><span class="lamp"></span><span class="pname"></span></span><span class="pmeta"></span>';
+        for (let i = 2; i < 14; i++) tr.children[i].className = 'num';
         tbody.appendChild(tr);
       }
       const c = tr.children;
       const shown = !state.hidden.has(k);
-      tr.classList.toggle('hidden-series', !shown);
+      tr.classList.toggle('lifted', !shown);
       const cb = c[0].querySelector('input');
       cb.checked = shown;
-      cb.setAttribute('aria-label', 'Show ' + labelOf(p) + ' in charts');
-      c[0].querySelector('.swatch').style.background = colorFor(p);
-      c[1].textContent = p.name;
-      c[2].textContent = p.pid;
-      c[3].textContent = p.source;
-      c[4].innerHTML = '';
-      const st = document.createElement('span');
-      st.className = 'status ' + p.status;
-      st.textContent = p.status === 'running' && state.run.endedAt ? 'Running at end' : (STATUS_TEXT[p.status] || p.status);
-      if (p.endedAt) st.title = 'at ' + fmtDateTime(p.endedAt);
-      c[4].appendChild(st);
-      const has = p.n > 0;
-      c[5].textContent = num(p.n, 0);
-      c[6].textContent = has ? fmtPct(p.cpuAvg) : '-';
-      c[7].textContent = has ? fmtPct(p.cpuP95) : '-';
-      c[8].textContent = has ? fmtPct(p.cpuMax) : '-';
-      c[9].textContent = has ? fmtCores(coresOf(p.cpuMax)) : '-';
-      c[10].textContent = has ? fmtMB(p.wsLast) + ' / ' + fmtMB(p.wsMax) : '-';
-      c[11].textContent = has ? fmtMB(p.privFirst) + ' → ' + fmtMB(p.privLast) : '-';
-      c[12].textContent = has ? fmtMB(p.privMax) : '-';
-      c[13].textContent = has ? fmtInt(p.threadsMax) : '-';
-      c[14].textContent = has ? fmtInt(p.handlesMax) : '-';
-      c[15].textContent = fmtBytes(p.ioReadTotal);
-      c[16].textContent = fmtBytes(p.ioWriteTotal);
+      cb.setAttribute('aria-label', 'Show ' + labelOf(p) + ' on the charts');
+      c[0].querySelector('.ink').style.background = colorFor(p);
+
+      const lamp = c[1].querySelector('.lamp');
+      lamp.className = 'lamp' + (LAMP_FOR[p.status] ? ' ' + LAMP_FOR[p.status] : '');
+      lamp.title = STATUS_TEXT[p.status] || p.status;
+      c[1].querySelector('.pname').textContent = p.name;
+      // Sources look like "pid", "port 5057" or "pid, port 5057".
+      const ports = p.source.split(', ').filter(s => s !== 'pid');
+      let meta = 'PID ' + p.pid + (ports.length ? ' on ' + ports.join(' and ') : '');
+      if (p.status !== 'running') meta += ', ' + (STATUS_TEXT[p.status] || p.status) + (p.endedAt ? ' at ' + fmtTime(p.endedAt) : '');
+      c[1].querySelector('.pmeta').textContent = meta;
+
+      const has = p.n > 0, now = latestOf(k);
+      c[2].textContent = now ? fmtPct(now[M.cpu]) : '-';
+      c[3].textContent = has ? fmtPct(p.cpuAvg) : '-';
+      c[4].textContent = has ? fmtPct(p.cpuP95) : '-';
+      c[5].textContent = has ? fmtPct(p.cpuMax) : '-';
+      c[5].title = has ? fmtCores(coresOf(p.cpuMax)) + ' cores' : '';
+      c[6].textContent = now ? fmtMB(now[M.ws]) : '-';
+      c[7].textContent = has ? fmtMB(p.wsMax) : '-';
+      c[8].textContent = now ? fmtMB(now[M.priv]) : '-';
+      c[9].textContent = has ? signedMB(p.privLast - p.privFirst) : '-';
+      c[9].title = has ? 'from ' + fmtMB(p.privFirst) + ' to ' + fmtMB(p.privLast) + ', peak ' + fmtMB(p.privMax) : '';
+      c[10].textContent = now ? fmtInt(now[M.threads]) : '-';
+      c[10].title = has ? 'peak ' + fmtInt(p.threadsMax) : '';
+      c[11].textContent = now ? fmtInt(now[M.handles]) : '-';
+      c[11].title = has ? 'peak ' + fmtInt(p.handlesMax) : '';
+      c[12].textContent = fmtBytes(p.ioReadTotal);
+      c[13].textContent = fmtBytes(p.ioWriteTotal);
     }
   }
 
@@ -619,19 +740,27 @@
     const shown = state.events.slice(-300).reverse();
     for (const e of shown) {
       const li = document.createElement('li');
+      const mark = document.createElement('span');
+      mark.className = 'mark';
       const time = document.createElement('time');
       time.textContent = fmtDateTime(e.t);
-      const lvl = document.createElement('span');
-      lvl.className = 'lvl ' + e.level;
-      lvl.textContent = e.level === 'warn' ? '! Warning' : 'Info';
       const msg = document.createElement('span');
-      msg.textContent = e.msg;
-      li.append(time, lvl, msg);
+      if (e.level === 'warn') {
+        mark.textContent = '!';
+        mark.setAttribute('aria-hidden', 'true');
+        const sr = document.createElement('span');
+        sr.className = 'sr-only';
+        sr.textContent = 'Warning: ';
+        msg.append(sr);
+      }
+      msg.append(document.createTextNode(e.msg));
+      li.append(mark, time, msg);
       list.appendChild(li);
     }
-    let count = state.events.length + ' event' + (state.events.length === 1 ? '' : 's');
-    if (state.events.length > shown.length) count += ', newest ' + shown.length + ' shown';
-    $('eventCount').textContent = count + ', newest first';
+    let count = state.events.length === 0 ? 'Nothing logged yet.' :
+      state.events.length + ' entr' + (state.events.length === 1 ? 'y' : 'ies') + ', newest first. A red mark flags a warning.';
+    if (state.events.length > shown.length) count += ' Showing the latest ' + shown.length + '.';
+    $('eventCount').textContent = count;
   }
 
   function renderFooter() {
@@ -639,14 +768,15 @@
     f.textContent = '';
     let text = 'Generated by stat ' + state.run.version;
     if (state.mode === 'report' && state.generatedAt) text += ' on ' + fmtDateTime(state.generatedAt) + ' ' + utcLabel();
-    text += '. ' + state.run.host + ' runs ' + state.run.os + '. Command: ' + state.run.commandLine + '. Charts by Chart.js (MIT licence).';
+    text += '. ' + state.run.host + ' runs ' + state.run.os + '. Command: ' + state.run.commandLine +
+      '. Charts by Chart.js (MIT licence); type is B612 (SIL Open Font License).';
     f.textContent = text;
   }
 
   function render() {
     if (!state.run) return;
+    readColors();
     renderHeader();
-    renderCards();
     renderTable();
     renderCharts();
     renderEvents();
@@ -742,11 +872,12 @@
     return fetch('api/series', { cache: 'no-store' })
       .then(r => r.json())
       .then(d => { state.series = d.series; state.seriesFetchedAt = Date.now(); })
-      .catch(() => { /* keep the previous data; the status pill shows connection problems */ });
+      .catch(() => { /* keep the previous data; the station lamp shows connection problems */ });
   }
 
   function onTick(tick) {
     state.lastTick = tick.t;
+    state.lastTickAt = Date.now();
     for (const s of tick.samples) {
       let arr = state.recent.get(s.k);
       if (!arr) state.recent.set(s.k, arr = []);
@@ -788,12 +919,15 @@
         setProcesses(d.processes);
         addEvents(d.events);
         Object.keys(d.recent).forEach(k => state.recent.set(k, d.recent[k]));
-        state.lastTick = Date.now();
+        state.lastTick = d.now || Date.now();
+        state.lastTickAt = Date.now();
         setRange(300000);
         connect();
+        setInterval(renderClock, 1000);
       })
-      .catch(err => {
-        $('runMeta').textContent = 'Could not reach stat.exe: ' + err.message;
+      .catch(() => {
+        $('lamp').className = 'lamp fault';
+        $('stationText').textContent = 'Cannot reach stat.exe. Check that it is still running, then reload this page.';
       });
   }
 
@@ -814,8 +948,18 @@
 
   // ---------------------------------------------------------------- boot
 
+  Chart.defaults.font.family = FONT;
   initControls();
   if (theme !== 'auto') document.documentElement.setAttribute('data-theme', theme);
+  // Canvas text is measured with whatever font is ready, and Chart.js caches those widths.
+  // Rebuild the charts once B612 has loaded so axis labels are sized for it.
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(() => {
+      charts.forEach(c => c.destroy());
+      charts.clear();
+      if (state.run) render();
+    });
+  }
   $('themeToggle').textContent = 'Theme: ' + theme;
   const inline = document.getElementById('stat-data');
   if (inline) startReport(JSON.parse(inline.textContent));

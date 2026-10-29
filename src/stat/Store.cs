@@ -336,6 +336,7 @@ namespace Stat
                 var j = new Json(64 * 1024);
                 j.BeginObject();
                 j.Prop("mode", "live");
+                j.Prop("now", (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds);
                 j.Name("run"); WriteRun(j);
                 j.Name("processes"); WriteProcesses(j);
                 j.Name("events"); WriteEvents(j, _events);
