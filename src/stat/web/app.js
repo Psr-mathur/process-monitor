@@ -213,12 +213,8 @@
 
   // ---------------------------------------------------------------- charts
 
-  // Tooltip mode: for each visible series, the point nearest the pointer's time.
-  Chart.Interaction.modes.statNearestX = function (chart, e) {
-    const pos = Chart.helpers.getRelativePosition(e, chart);
-    const area = chart.chartArea;
-    if (!area || pos.x < area.left || pos.x > area.right || pos.y < area.top || pos.y > area.bottom) return [];
-    const xVal = chart.scales.x.getValueForPixel(pos.x);
+  /** For each visible series in a chart, the point nearest time xVal (within 4% of the visible span). */
+  function nearestItems(chart, xVal) {
     const span = chart.scales.x.max - chart.scales.x.min;
     const items = [];
     chart.data.datasets.forEach((ds, di) => {
@@ -238,15 +234,53 @@
       if (el) items.push({ element: el, datasetIndex: di, index: best });
     });
     return items;
+  }
+
+  // Click mode (used for legend/tooltip clicks): points nearest the pointer's time.
+  Chart.Interaction.modes.statNearestX = function (chart, e) {
+    const pos = Chart.helpers.getRelativePosition(e, chart);
+    const area = chart.chartArea;
+    if (!area || pos.x < area.left || pos.x > area.right || pos.y < area.top || pos.y > area.bottom) return [];
+    return nearestItems(chart, chart.scales.x.getValueForPixel(pos.x));
   };
+
+  // Hover is synced across charts: the pointer over any chart picks a time, and every chart
+  // shows its crosshair and tooltip at that time. Kept as chart + pixel so live updates that
+  // scroll the axis keep the overlay under the pointer.
+  const hover = { chart: null, px: 0 };
+  function hoverTime() {
+    const c = hover.chart;
+    return c && c.chartArea && charts.get(c.$statId) === c ? c.scales.x.getValueForPixel(hover.px) : null;
+  }
+
+  function syncHover() {
+    const t = drag ? null : hoverTime();
+    charts.forEach(chart => {
+      const area = chart.chartArea;
+      if (!area) return;
+      const items = t == null ? [] : nearestItems(chart, t);
+      const px = t == null ? 0 : chart.scales.x.getPixelForValue(t);
+      chart.$statHoverX = t == null ? null : px;
+      chart.setActiveElements(items);
+      chart.tooltip.setActiveElements(items, { x: px, y: (area.top + area.bottom) / 2 });
+      chart.draw();
+    });
+  }
+
+  let syncQueued = false;
+  function queueSync() {
+    if (syncQueued) return;
+    syncQueued = true;
+    requestAnimationFrame(() => { syncQueued = false; syncHover(); });
+  }
 
   const crosshairPlugin = {
     id: 'statCrosshair',
     afterDatasetsDraw(chart) {
       const ctx = chart.ctx, area = chart.chartArea;
-      const active = chart.tooltip && chart.tooltip.getActiveElements();
-      if (active && active.length && !drag) {
-        const x = active[0].element.x;
+      const hx = chart.$statHoverX;
+      if (hx != null && !drag && hx >= area.left && hx <= area.right) {
+        const x = hx;
         ctx.save();
         ctx.strokeStyle = cssVar('--axis');
         ctx.lineWidth = 1;
@@ -269,17 +303,32 @@
   let drag = null;
   function attachZoom(chart) {
     const canvas = chart.canvas;
+    // Pointer position in chart pixels (the canvas has no border or transform, so this matches Chart.js).
+    const local = e => { const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
     canvas.addEventListener('pointerdown', e => {
       if (e.button !== 0) return;
-      const a = chart.chartArea, x = e.offsetX;
+      const a = chart.chartArea, x = local(e).x;
       if (x < a.left || x > a.right) return;
       drag = { chart, x0: x, x1: x };
       canvas.setPointerCapture(e.pointerId);
+      queueSync(); // hide tooltips while dragging
     });
     canvas.addEventListener('pointermove', e => {
-      if (!drag || drag.chart !== chart) return;
-      drag.x1 = e.offsetX;
-      chart.draw();
+      const p = local(e);
+      if (drag) {
+        if (drag.chart !== chart) return;
+        drag.x1 = p.x;
+        chart.draw();
+        return;
+      }
+      const a = chart.chartArea;
+      const inside = a && p.x >= a.left && p.x <= a.right && p.y >= a.top && p.y <= a.bottom;
+      hover.chart = inside ? chart : null;
+      hover.px = p.x;
+      queueSync();
+    });
+    canvas.addEventListener('pointerleave', () => {
+      if (hover.chart === chart) { hover.chart = null; queueSync(); }
     });
     const end = e => {
       if (!drag || drag.chart !== chart) return;
@@ -379,6 +428,8 @@
           plugins: [crosshairPlugin],
           options: {
             parsing: false, normalized: true, animation: false, responsive: true, maintainAspectRatio: false,
+            // Hover is driven by syncHover(); Chart.js only handles clicks (legend toggles).
+            events: ['click'],
             interaction: { mode: 'statNearestX', intersect: false },
             scales: {
               x: { type: 'linear', afterBuildTicks: timeTicks, grid: { color: grid }, border: { color: axis }, ticks: { color: muted, maxRotation: 0, autoSkip: false, font: { size: 11 } } },
@@ -394,7 +445,10 @@
                 backgroundColor: surface, titleColor: muted, bodyColor: text, borderColor: axis, borderWidth: 1,
                 padding: 10, boxWidth: 14, boxHeight: 2, usePointStyle: false, titleFont: { weight: 'normal', size: 11.5 }, bodyFont: { size: 12 },
                 callbacks: {
-                  title: items => items.length ? fmtStamp(items[0].raw.x).slice(0, 19) : '',
+                  title: items => {
+                    const t = hoverTime();
+                    return t != null ? fmtStamp(t).slice(0, 19) : items.length ? fmtStamp(items[0].raw.x).slice(0, 19) : '';
+                  },
                   label: item => tooltipLabel(def, item),
                   labelColor: item => ({ borderColor: item.dataset.borderColor, backgroundColor: item.dataset.borderColor, borderWidth: 0 }),
                 },
@@ -402,6 +456,7 @@
             },
           },
         });
+        chart.$statId = def.id;
         attachZoom(chart);
         charts.set(def.id, chart);
       } else {
@@ -419,6 +474,7 @@
     note.push('Drag across a chart to zoom' + (state.zoom ? ', double-click to reset.' : '.'));
     $('viewNote').textContent = note.join(' ');
     $('resetZoom').hidden = !state.zoom;
+    if (hover.chart) syncHover(); // re-apply after live updates rebuilt the datasets
   }
 
   function tooltipLabel(def, item) {

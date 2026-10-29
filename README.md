@@ -66,7 +66,7 @@ The dashboard always runs while `stat.exe` is monitoring. It shows:
 
 - **Summary cards:** duration, running processes, peak CPU, peak working set, peak private memory and total I/O.
 - **Processes table:** per-process CPU average, p95 and max, memory, threads, handles and I/O totals. Untick a process to hide it from the charts.
-- **Charts:** CPU, working set, private memory, threads, handles, and I/O read, write and other. Hover for every process's value at that moment; drag across any chart to zoom all of them; double-click to reset.
+- **Charts:** CPU, working set, private memory, threads, handles, and I/O read, write and other. Hover over any chart and every chart shows a crosshair and the values for all processes at that same moment; drag across any chart to zoom all of them; double-click to reset.
 - **Time range:** last 1, 5 or 15 minutes, or the whole run.
 - **Events:** processes found, exited or inaccessible, and port listener changes.
 
