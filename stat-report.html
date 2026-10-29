@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Process Performance Dashboard (With Resampling)</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <style>
+    :root {
+      --bg-color: #0f172a;
+      --card-bg: #1e293b;
+      --border-color: #334155;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent: #38bdf8;
+      --accent-hover: #0284c7;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    
+    html, body { height: 100vh; background-color: var(--bg-color); color: var(--text-main); overflow: hidden; }
+    body { display: flex; flex-direction: column; padding: 14px; gap: 10px; }
+
+    header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 10px; border-bottom: 1px solid var(--border-color); flex-shrink: 0; }
+    h1 { font-size: 1.25rem; font-weight: 600; color: var(--accent); }
+    
+    .file-input-wrapper { position: relative; overflow: hidden; display: inline-block; }
+    .btn-upload { background-color: var(--accent); color: #000; padding: 6px 14px; border-radius: 6px; font-weight: 600; cursor: pointer; transition: 0.2s; font-size: 0.8rem; }
+    .btn-upload:hover { background-color: var(--accent-hover); color: #fff; }
+    .file-input-wrapper input[type=file] { position: absolute; left: 0; top: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+
+    #emptyState { text-align: center; padding: 60px 20px; color: var(--text-muted); background: var(--card-bg); border: 2px dashed var(--border-color); border-radius: 8px; margin-top: 20px; }
+
+    #dashboardContent { display: none; flex: 1; flex-direction: column; gap: 10px; min-height: 0; }
+
+    .filter-toolbar { display: flex; align-items: center; gap: 12px; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 8px 14px; flex-shrink: 0; flex-wrap: wrap; }
+    .filter-group { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--text-muted); }
+    .filter-group select, .filter-group input[type="range"] { background: var(--bg-color); color: var(--text-main); border: 1px solid var(--border-color); border-radius: 4px; padding: 4px 8px; font-size: 0.8rem; outline: none; }
+    .btn-preset { background: var(--border-color); color: var(--text-main); border: none; padding: 4px 10px; border-radius: 4px; font-size: 0.75rem; cursor: pointer; transition: 0.2s; }
+    .btn-preset:hover { background: var(--accent); color: #000; }
+
+    .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; flex-shrink: 0; }
+    .stat-card { background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 8px 12px; }
+    .stat-title { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    .stat-value { font-size: 1.15rem; font-weight: 700; margin-top: 2px; color: var(--text-main); }
+
+    .main-grid { display: grid; grid-template-columns: 2.2fr 1fr; gap: 10px; flex: 1; min-height: 0; }
+
+    .charts-container { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 10px; min-height: 0; }
+    .chart-card { background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; min-height: 0; position: relative; }
+    .chart-title { font-size: 0.78rem; font-weight: 600; color: var(--text-main); flex-shrink: 0; }
+    
+    .canvas-wrapper { flex: 1; min-height: 0; position: relative; width: 100%; }
+
+    .table-card { background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; min-height: 0; }
+    .table-wrapper { flex: 1; overflow-y: auto; overflow-x: auto; min-height: 0; margin-top: 6px; }
+    table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.78rem; }
+    th, td { padding: 6px 8px; border-bottom: 1px solid var(--border-color); white-space: nowrap; }
+    th { color: var(--text-muted); font-size: 0.7rem; text-transform: uppercase; font-weight: 600; position: sticky; top: 0; background-color: var(--card-bg); z-index: 10; }
+    tr:hover { background-color: rgba(255, 255, 255, 0.03); }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>Process Log Analytics Dashboard</h1>
+    <div class="file-input-wrapper">
+      <span class="btn-upload">Load process-log.csv</span>
+      <input type="file" id="csvFileInput" accept=".csv" />
+    </div>
+  </header>
+
+  <div id="emptyState">
+    <h2>No Data Loaded</h2>
+    <p style="margin-top: 8px;">Upload a process log CSV file to view real-time process performance charts and metrics.</p>
+  </div>
+
+  <div id="dashboardContent">
+    <!-- Filter & Aggregation Control Toolbar -->
+    <div class="filter-toolbar">
+      <div class="filter-group">
+        <label>Smooth Interval:</label>
+        <select id="intervalSelect">
+          <option value="0">Raw (No Aggregation)</option>
+          <option value="500">0.5 sec</option>
+          <option value="1000" selected>1.0 sec</option>
+          <option value="2000">2.0 sec</option>
+          <option value="5000">5.0 sec</option>
+          <option value="10000">10.0 sec</option>
+        </select>
+      </div>
+
+      <div class="filter-group">
+        <label>Mode:</label>
+        <select id="aggModeSelect">
+          <option value="mean" selected>Average (Mean)</option>
+          <option value="max">Peak (Max)</option>
+        </select>
+      </div>
+
+      <div class="filter-group" style="margin-left: 10px;">
+        <label>Start:</label>
+        <select id="startTimeSelect"></select>
+      </div>
+
+      <div class="filter-group">
+        <label>End:</label>
+        <select id="endTimeSelect"></select>
+      </div>
+
+      <div class="filter-group" style="flex: 1; min-width: 140px;">
+        <input type="range" id="startSlider" style="flex:1;" />
+        <input type="range" id="endSlider" style="flex:1;" />
+      </div>
+
+      <button class="btn-preset" id="btnResetRange">Reset</button>
+    </div>
+
+    <!-- Summary Metrics -->
+    <div class="stats-grid">
+      <div class="stat-card"><div class="stat-title">Sample Points</div><div class="stat-value" id="statSamples">0</div></div>
+      <div class="stat-card"><div class="stat-title">Peak CPU %</div><div class="stat-value" id="statMaxCPU">0%</div></div>
+      <div class="stat-card"><div class="stat-title">Peak RAM (MB)</div><div class="stat-value" id="statMaxRAM">0 MB</div></div>
+      <div class="stat-card"><div class="stat-title">Peak Disk I/O Write</div><div class="stat-value" id="statMaxIOWrite">0 KB/s</div></div>
+    </div>
+
+    <!-- Charts & Table Split -->
+    <div class="main-grid">
+      <div class="charts-container">
+        <div class="chart-card">
+          <div class="chart-title">CPU Utilization Over Time (%)</div>
+          <div class="canvas-wrapper"><canvas id="cpuChart"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">RAM Working Set (MB)</div>
+          <div class="canvas-wrapper"><canvas id="ramChart"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">Disk Write Activity (KB/s)</div>
+          <div class="canvas-wrapper"><canvas id="ioWriteChart"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">OS Handles</div>
+          <div class="canvas-wrapper"><canvas id="handlesChart"></canvas></div>
+        </div>
+      </div>
+
+      <div class="table-card">
+        <div class="chart-title">Process Breakdown</div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>PID</th>
+                <th>Process</th>
+                <th>Avg CPU</th>
+                <th>Max CPU</th>
+                <th>Max RAM</th>
+                <th>Max Disk Write</th>
+              </tr>
+            </thead>
+            <tbody id="processTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let rawParsedData = [];
+    let processedTimestamps = [];
+    let processMapData = {};
+    let processMetaData = {};
+    let charts = {};
+    let debounceTimer = null;
+
+    document.getElementById('csvFileInput').addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      Papa.parse(file, {
+        header: true,
+        dynamicTyping: true,
+        skipEmptyLines: true,
+        complete: function(results) {
+          rawParsedData = results.data.filter(d => d && d.Time);
+          resampleAndProcessData();
+          initTimeControls();
+          updateDashboard();
+        }
+      });
+    });
+
+    document.getElementById('intervalSelect').addEventListener('change', () => {
+      resampleAndProcessData();
+      initTimeControls();
+      updateDashboard();
+    });
+
+    document.getElementById('aggModeSelect').addEventListener('change', () => {
+      resampleAndProcessData();
+      updateDashboard();
+    });
+
+    // Bucket and aggregate high-frequency data
+    function resampleAndProcessData() {
+      processMapData = {};
+      processMetaData = {};
+      const intervalMs = parseInt(document.getElementById('intervalSelect').value) || 0;
+      const mode = document.getElementById('aggModeSelect').value;
+
+      const timeSet = new Set();
+      const bucketStore = {};
+
+      for (let i = 0; i < rawParsedData.length; i++) {
+        const row = rawParsedData[i];
+        const processKey = `${row.Process} (${row.PID})`;
+        
+        if (!processMetaData[processKey]) {
+          processMetaData[processKey] = { pid: row.PID, process: row.Process };
+        }
+
+        let timeStr = row.Time.split(' ')[1] || row.Time;
+
+        if (intervalMs > 0) {
+          // Parse timestamp into rounded interval bucket
+          const dt = new Date(row.Time.includes(' ') ? row.Time.replace(' ', 'T') : row.Time);
+          const ms = dt.getTime();
+          if (!isNaN(ms)) {
+            const bucketMs = Math.floor(ms / intervalMs) * intervalMs;
+            const bDt = new Date(bucketMs);
+            timeStr = bDt.toTimeString().split(' ')[0] + '.' + String(bDt.getMilliseconds()).padStart(3, '0');
+          }
+        }
+
+        timeSet.add(timeStr);
+
+        if (!bucketStore[processKey]) bucketStore[processKey] = {};
+        if (!bucketStore[processKey][timeStr]) bucketStore[processKey][timeStr] = [];
+
+        bucketStore[processKey][timeStr].push(row);
+      }
+
+      processedTimestamps = Array.from(timeSet).sort();
+
+      // Aggregate buckets (Mean or Max)
+      Object.keys(bucketStore).forEach(pKey => {
+        processMapData[pKey] = {};
+        Object.keys(bucketStore[pKey]).forEach(tStr => {
+          const rows = bucketStore[pKey][tStr];
+          if (rows.length === 1 || intervalMs === 0) {
+            processMapData[pKey][tStr] = rows[0];
+          } else {
+            if (mode === 'max') {
+              processMapData[pKey][tStr] = {
+                PID: rows[0].PID,
+                Process: rows[0].Process,
+                CPU_Percent: Math.max(...rows.map(r => r.CPU_Percent || 0)),
+                RAM_MB: Math.max(...rows.map(r => r.RAM_MB || 0)),
+                IO_Write_BytesPerSec: Math.max(...rows.map(r => r.IO_Write_BytesPerSec || 0)),
+                Handles: Math.max(...rows.map(r => r.Handles || 0))
+              };
+            } else {
+              // Mean / Average
+              const len = rows.length;
+              processMapData[pKey][tStr] = {
+                PID: rows[0].PID,
+                Process: rows[0].Process,
+                CPU_Percent: rows.reduce((s, r) => s + (r.CPU_Percent || 0), 0) / len,
+                RAM_MB: rows.reduce((s, r) => s + (r.RAM_MB || 0), 0) / len,
+                IO_Write_BytesPerSec: rows.reduce((s, r) => s + (r.IO_Write_BytesPerSec || 0), 0) / len,
+                Handles: Math.round(rows.reduce((s, r) => s + (r.Handles || 0), 0) / len)
+              };
+            }
+          }
+        });
+      });
+    }
+
+    function initTimeControls() {
+      const startSelect = document.getElementById('startTimeSelect');
+      const endSelect = document.getElementById('endTimeSelect');
+      const startSlider = document.getElementById('startSlider');
+      const endSlider = document.getElementById('endSlider');
+
+      startSelect.innerHTML = '';
+      endSelect.innerHTML = '';
+
+      processedTimestamps.forEach((t, i) => {
+        startSelect.add(new Option(t, i));
+        endSelect.add(new Option(t, i));
+      });
+
+      startSlider.min = 0; startSlider.max = processedTimestamps.length - 1; startSlider.value = 0;
+      endSlider.min = 0; endSlider.max = processedTimestamps.length - 1; endSlider.value = processedTimestamps.length - 1;
+
+      startSelect.value = 0;
+      endSelect.value = processedTimestamps.length - 1;
+
+      const triggerDebouncedUpdate = () => {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(updateDashboard, 100);
+      };
+
+      startSelect.onchange = () => {
+        startSlider.value = startSelect.value;
+        if (parseInt(startSelect.value) > parseInt(endSelect.value)) {
+          endSelect.value = startSelect.value; endSlider.value = startSelect.value;
+        }
+        triggerDebouncedUpdate();
+      };
+
+      endSelect.onchange = () => {
+        endSlider.value = endSelect.value;
+        if (parseInt(endSelect.value) < parseInt(startSelect.value)) {
+          startSelect.value = endSelect.value; startSlider.value = endSelect.value;
+        }
+        triggerDebouncedUpdate();
+      };
+
+      startSlider.oninput = () => {
+        startSelect.value = startSlider.value;
+        if (parseInt(startSlider.value) > parseInt(endSlider.value)) {
+          endSelect.value = startSlider.value; startSlider.value = startSlider.value;
+        }
+        triggerDebouncedUpdate();
+      };
+
+      endSlider.oninput = () => {
+        endSelect.value = endSlider.value;
+        if (parseInt(endSlider.value) < parseInt(startSlider.value)) {
+          startSelect.value = endSlider.value; startSlider.value = endSlider.value;
+        }
+        triggerDebouncedUpdate();
+      };
+
+      document.getElementById('btnResetRange').onclick = () => {
+        startSelect.value = 0;
+        endSelect.value = processedTimestamps.length - 1;
+        startSlider.value = 0;
+        endSlider.value = processedTimestamps.length - 1;
+        updateDashboard();
+      };
+    }
+
+    function updateDashboard() {
+      if (!processedTimestamps || processedTimestamps.length === 0) return;
+
+      const startIndex = parseInt(document.getElementById('startTimeSelect').value) || 0;
+      const endIndex = parseInt(document.getElementById('endTimeSelect').value) || (processedTimestamps.length - 1);
+
+      const filteredTimestamps = processedTimestamps.slice(startIndex, endIndex + 1);
+
+      document.getElementById('emptyState').style.display = 'none';
+      document.getElementById('dashboardContent').style.display = 'flex';
+
+      const colors = ['#38bdf8', '#f43f5e', '#10b981', '#a855f7', '#f59e0b', '#ec4899', '#6366f1', '#14b8a6'];
+
+      let globalMaxCPU = 0, globalMaxRAM = 0, globalMaxIOWrite = 0, totalSampleCount = 0;
+
+      const tbody = document.getElementById('processTableBody');
+      tbody.innerHTML = '';
+
+      const processKeys = Object.keys(processMapData);
+
+      processKeys.forEach((key) => {
+        const meta = processMetaData[key];
+        let cpuSum = 0, count = 0;
+        let peakCpu = 0, peakRam = 0, peakIo = 0;
+
+        for (let i = 0; i < filteredTimestamps.length; i++) {
+          const t = filteredTimestamps[i];
+          const row = processMapData[key][t];
+          if (row) {
+            count++;
+            totalSampleCount++;
+            const cpu = row.CPU_Percent || 0;
+            const ram = row.RAM_MB || 0;
+            const io = (row.IO_Write_BytesPerSec || 0) / 1024;
+
+            cpuSum += cpu;
+            if (cpu > peakCpu) peakCpu = cpu;
+            if (ram > peakRam) peakRam = ram;
+            if (io > peakIo) peakIo = io;
+          }
+        }
+
+        if (peakCpu > globalMaxCPU) globalMaxCPU = peakCpu;
+        if (peakRam > globalMaxRAM) globalMaxRAM = peakRam;
+        if (peakIo > globalMaxIOWrite) globalMaxIOWrite = peakIo;
+
+        const avgCpu = count > 0 ? (cpuSum / count).toFixed(1) : '0.0';
+
+        tbody.innerHTML += `
+          <tr>
+            <td><strong>${meta.pid}</strong></td>
+            <td>${meta.process}</td>
+            <td>${avgCpu}%</td>
+            <td><span style="color: ${peakCpu > 50 ? '#f43f5e' : 'inherit'}; font-weight: 600;">${peakCpu.toFixed(1)}%</span></td>
+            <td>${peakRam.toFixed(0)} MB</td>
+            <td>${peakIo.toFixed(1)} KB/s</td>
+          </tr>
+        `;
+      });
+
+      document.getElementById('statSamples').innerText = filteredTimestamps.length.toLocaleString();
+      document.getElementById('statMaxCPU').innerText = globalMaxCPU.toFixed(2) + '%';
+      document.getElementById('statMaxRAM').innerText = globalMaxRAM.toFixed(2) + ' MB';
+      document.getElementById('statMaxIOWrite').innerText = globalMaxIOWrite.toFixed(2) + ' KB/s';
+
+      function buildDataset(metricFn) {
+        return processKeys.map((key, i) => ({
+          label: key,
+          data: filteredTimestamps.map(t => {
+            const row = processMapData[key][t];
+            return row ? metricFn(row) : 0;
+          }),
+          borderColor: colors[i % colors.length],
+          backgroundColor: colors[i % colors.length] + '22',
+          tension: 0.1,
+          borderWidth: 1.5,
+          pointRadius: 0,
+          pointHoverRadius: 3
+        }));
+      }
+
+      createOrUpdateChart('cpuChart', filteredTimestamps, buildDataset(r => r.CPU_Percent || 0), '%');
+      createOrUpdateChart('ramChart', filteredTimestamps, buildDataset(r => r.RAM_MB || 0), 'MB');
+      createOrUpdateChart('ioWriteChart', filteredTimestamps, buildDataset(r => (r.IO_Write_BytesPerSec || 0) / 1024), 'KB/s');
+      createOrUpdateChart('handlesChart', filteredTimestamps, buildDataset(r => r.Handles || 0), 'Count');
+    }
+
+    function createOrUpdateChart(canvasId, labels, datasets, yLabel) {
+      if (charts[canvasId]) charts[canvasId].destroy();
+
+      const ctx = document.getElementById(canvasId).getContext('2d');
+      charts[canvasId] = new Chart(ctx, {
+        type: 'line',
+        data: { labels: labels, datasets: datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          normalized: true,
+          interaction: { mode: 'index', intersect: false },
+          onHover: (event, activeElements) => {
+            if (activeElements.length > 0) {
+              const dataIndex = activeElements[0].index;
+              syncHover(canvasId, dataIndex);
+            }
+          },
+          plugins: {
+            legend: { position: 'top', labels: { color: '#94a3b8', boxWidth: 8, font: { size: 9 } } },
+            tooltip: { backgroundColor: '#1e293b', titleColor: '#f8fafc', bodyColor: '#f8fafc', borderColor: '#334155', borderWidth: 1 }
+          },
+          scales: {
+            x: { ticks: { color: '#94a3b8', maxTicksLimit: 6, font: { size: 8 } }, grid: { color: '#334155' } },
+            y: { title: { display: true, text: yLabel, color: '#94a3b8', font: { size: 9 } }, ticks: { color: '#94a3b8', font: { size: 8 } }, grid: { color: '#334155' } }
+          }
+        }
+      });
+    }
+
+    function syncHover(sourceCanvasId, dataIndex) {
+      Object.keys(charts).forEach(id => {
+        if (id !== sourceCanvasId) {
+          const chart = charts[id];
+          const activeElements = [];
+          chart.data.datasets.forEach((dataset, datasetIndex) => {
+            activeElements.push({ datasetIndex, index: dataIndex });
+          });
+          chart.setActiveElements(activeElements);
+          chart.tooltip.setActiveElements(activeElements, { x: 0, y: 0 });
+          chart.update('none');
+        }
+      });
+    }
+  </script>
+</body>
+</html>
