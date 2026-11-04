@@ -48,7 +48,7 @@ namespace Stat
         public static string ReportPage(string dataJson, string title)
         {
             return IndexHtml
-                .Replace("<title>stat</title>", "<title>" + System.Net.WebUtility.HtmlEncode(title) + "</title>")
+                .Replace("<title>" + Brand.Product + "</title>", "<title>" + System.Net.WebUtility.HtmlEncode(title) + "</title>")
                 .Replace("<link rel=\"stylesheet\" href=\"fonts.css\">", "<style>\n" + FontCss + "</style>")
                 .Replace("<link rel=\"stylesheet\" href=\"app.css\">", "<style>\n" + AppCss + "\n</style>")
                 .Replace("<script src=\"chart.umd.min.js\"></script>", "<script>\n" + EscapeScript(ChartJs) + "\n</script>")

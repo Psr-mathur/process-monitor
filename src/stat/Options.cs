@@ -18,14 +18,18 @@ namespace Stat
         public string OutFile { get; private set; }
         public bool ShowHelp { get; private set; }
         public bool ShowVersion { get; private set; }
+        /// <summary>Labels from --label, keyed by target: "port:4000" or "pid:21332".</summary>
+        public Dictionary<string, string> Labels { get; } = new Dictionary<string, string>();
 
-        public const string Usage =
-@"stat - Windows process monitor with a live dashboard and HTML report
+        public static string Usage =>
+$@"{Brand.Product} - Windows process monitor with a live dashboard and HTML report
+Built by {Brand.Author} - {Brand.RepoUrl}
 
 Usage:
-  stat.exe --pid=21332,54342
-  stat.exe --port=5000,1433
-  stat.exe --pid=21332 --port=5000,1433 --interval=0.5 --out=report.html
+  {Brand.Exe} --pid=21332,54342
+  {Brand.Exe} --port=5000,1433
+  {Brand.Exe} --pid=21332 --port=5000,1433 --interval=0.5 --out=report.html
+  {Brand.Exe} --port=3000,4000 --label=3000:fe,4000:be
 
 Targets (at least one required):
   --pid=PID[,PID...]       Process IDs to monitor (commas or spaces)
@@ -38,6 +42,8 @@ Options:
                            Use 0.0.0.0 to allow access from other machines.
   --out=FILE.html          Also write a self-contained HTML report. It is saved
                            every 30 seconds and when monitoring stops.
+  --label=N:TEXT[,N:TEXT]  Label the process on port or PID N, shown as
+                           name:TEXT (e.g. node:be). Can also be set in the dashboard.
   --help                   Show this help
   --version                Show the version
 
@@ -49,6 +55,7 @@ Press Ctrl+C to stop.";
         {
             var o = new Options();
             string lastList = null; // "pid" or "port": bare numbers that follow are added to it
+            var labels = new List<KeyValuePair<int, string>>();
 
             foreach (string arg in args)
             {
@@ -109,6 +116,16 @@ Press Ctrl+C to stop.";
                             throw new ArgumentException("--out writes an HTML report; give it a .html file name, e.g. --out=report.html.");
                         o.OutFile = Path.GetFullPath(file);
                         break;
+                    case "label":
+                        foreach (string part in RequireValue(name, value).Split(','))
+                        {
+                            var lm = Regex.Match(part.Trim(), @"^(\d+):(.+)$");
+                            if (!lm.Success || !int.TryParse(lm.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out int n)
+                                || Store.CleanLabel(lm.Groups[2].Value) == null)
+                                throw new ArgumentException($"'{part.Trim()}' is not a valid label. Use --label=PORT:TEXT, e.g. --label=4000:be.");
+                            labels.Add(new KeyValuePair<int, string>(n, lm.Groups[2].Value));
+                        }
+                        break;
                     case "help":
                         o.ShowHelp = true;
                         break;
@@ -124,6 +141,14 @@ Press Ctrl+C to stop.";
             o.Pids.Clear(); o.Pids.AddRange(pids);
             var ports = o.Ports.Distinct().ToList();
             o.Ports.Clear(); o.Ports.AddRange(ports);
+
+            // A label's number is a port when it is one of --port, otherwise one of --pid.
+            foreach (var kv in labels)
+            {
+                if (o.Ports.Contains(kv.Key)) o.Labels["port:" + kv.Key] = kv.Value;
+                else if (o.Pids.Contains(kv.Key)) o.Labels["pid:" + kv.Key] = kv.Value;
+                else throw new ArgumentException($"--label={kv.Key}:... does not match any --port or --pid value.");
+            }
             return o;
         }
 

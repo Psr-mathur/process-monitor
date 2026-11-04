@@ -123,6 +123,10 @@ h2 { font-size: 16px; font-weight: 700; letter-spacing: 0.01em; }
 .clock { grid-area: clock; text-align: right; line-height: 1; }
 .clock-face { font-size: 36px; font-variant-numeric: tabular-nums; }
 .clock-label { display: block; font-size: 12px; color: var(--muted); margin-top: 4px; }
+.credit { margin-bottom: 4px; }
+.credit b { color: var(--ink-2); }
+.credit a { color: var(--ink-2); text-decoration: underline; text-decoration-color: var(--rule); text-underline-offset: 2px; }
+.credit a:hover { color: var(--ink); text-decoration-color: var(--ink); }
 .run-sentence { grid-area: run; color: var(--ink-2); font-size: 14px; max-width: 80ch; }
 @media (max-width: 700px) {
   .masthead { grid-template-columns: 1fr; grid-template-areas: "ident" "clock" "run"; }
@@ -198,6 +202,25 @@ tbody tr.lifted .ink { opacity: 0.35; }
 .key { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
 .key input { margin: 0; accent-color: var(--ink); }
 .ink { display: inline-block; width: 22px; height: 3px; border-radius: 2px; }
+.ink.dashed { background: repeating-linear-gradient(90deg, currentColor 0 7px, transparent 7px 11px); }
+
+/* Total: the sum row, set off from the processes like a ledger total. */
+tfoot td { border-top: 1.5px solid var(--ink); }
+tfoot tr:hover td { background: var(--paper-2); }
+
+/* Labels: "Add label" beside each process name, and the inline editor it opens. */
+.relabel {
+  font: inherit; font-size: 11px; padding: 0 6px; margin-left: 2px; cursor: pointer; border-radius: 3px;
+  border: 1px solid var(--rule); background: transparent; color: var(--muted);
+}
+.relabel:hover, .relabel:focus-visible { color: var(--ink); border-color: var(--ink); }
+.label-form { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 6px; }
+.label-form .base { font-weight: 700; }
+.label-form input {
+  font: inherit; font-size: 13px; width: 12ch; padding: 1px 6px; border-radius: 3px;
+  border: 1.5px solid var(--ink); background: var(--paper); color: var(--ink);
+}
+.label-form .hint { font-size: 11px; color: var(--muted); flex-basis: 100%; }
 .empty { color: var(--ink-2); font-size: 14px; margin: 8px 0 2px; }
 
 /* ---- small multiples ---- */
@@ -222,8 +245,16 @@ tbody tr.lifted .ink { opacity: 0.35; }
 @media (max-width: 700px) { .events li { grid-template-columns: 18px 1fr; } .events li span:last-child { grid-column: 2; } }
 
 .footer { color: var(--muted); font-size: 12px; padding-top: 28px; max-width: 110ch; }
+.command { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin-top: 8px; }
+.command-label { color: var(--ink-2); }
+.command code {
+  font: 12px/1.5 Consolas, "Cascadia Mono", ui-monospace, monospace; color: var(--ink);
+  background: var(--paper-2); border: 1px solid var(--rule); border-radius: 3px; padding: 2px 8px;
+  overflow-wrap: anywhere; user-select: all;
+}
+.command .btn { padding: 2px 10px; font-size: 11px; }
 
 @media print {
-  .controls { display: none; }
+  .controls, .relabel, #copyCommand { display: none; }
   .multiples figure, .strip, .roster { break-inside: avoid; }
 }

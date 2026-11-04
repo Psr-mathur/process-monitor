@@ -124,7 +124,9 @@ namespace Stat
                     exited ? $"{Label(t.Series)} exited." : $"{Label(t.Series)} is no longer listening on the monitored ports.");
             }
 
-            // --- Sample each target ---
+            // --- Sample each target, adding every sample of this pass into the Total ---
+            var total = new Sample();
+            int sampled = 0;
             foreach (var kv in targets)
             {
                 int pid = kv.Key;
@@ -145,7 +147,17 @@ namespace Stat
                     if (!string.IsNullOrEmpty(entry.Name)) tracker.Series.Name = entry.Name;
                 }
                 tracker.Series.Source = source;
-                Sample(tracker, snapshot.TryGetValue(pid, out entry) ? entry.Threads : -1);
+                var sample = Sample(tracker, snapshot.TryGetValue(pid, out entry) ? entry.Threads : -1);
+                if (sample == null) continue;
+                for (int i = 0; i < M.Count; i++) total.V[i] += sample.V[i];
+                sampled++;
+            }
+
+            if (sampled > 0)
+            {
+                total.T = NowMs;
+                total.V[M.Cpu] = Math.Min(100.0, total.V[M.Cpu]);
+                _store.AddSample(_store.Total, total);
             }
         }
 
@@ -207,10 +219,17 @@ namespace Stat
                 Source = source,
                 StartedAt = startedAt,
             });
-            _store.Update(() => { series.Status = "running"; series.EndedAt = null; });
+            string label = _store.LabelFor(pid, source);
+            _store.Update(() =>
+            {
+                series.Status = "running";
+                series.EndedAt = null;
+                if (series.Label == null) series.Label = label;
+            });
 
             var tracker = new Tracker { Pid = pid, Handle = handle, Series = series };
             _trackers[pid] = tracker;
+            who = Label(series);
             Report($"pid:{pid}", "monitoring:" + creation, "info", $"Monitoring {who} via {source}.");
             return tracker;
         }
@@ -224,14 +243,15 @@ namespace Stat
             Report($"pid:{t.Pid}", status, status == "exited" ? "warn" : "info", message);
         }
 
-        private void Sample(Tracker t, int threads)
+        /// <summary>Reads one sample into the store. Returns null for the first (baseline) read or when the process is gone.</summary>
+        private Sample Sample(Tracker t, int threads)
         {
             // --- CPU: read, then timestamp immediately ---
             if (!Native.GetProcessTimes(t.Handle, out _, out long exitTime, out long kernel, out long user) || exitTime != 0)
             {
-                if (exitTime != 0) { Close(t, "exited", $"{Label(t.Series)} exited."); return; }
+                if (exitTime != 0) { Close(t, "exited", $"{Label(t.Series)} exited."); return null; }
                 Close(t, "unavailable", $"Lost access to {Label(t.Series)}.");
-                return;
+                return null;
             }
             double cpuSec = NowSec;
             long sampleTime = NowMs;
@@ -248,7 +268,7 @@ namespace Stat
             if (!memOk || !ioOk)
             {
                 Close(t, "unavailable", $"Lost access to {Label(t.Series)}.");
-                return;
+                return null;
             }
 
             double readBytes = io.ReadTransferCount, writeBytes = io.WriteTransferCount, otherBytes = io.OtherTransferCount;
@@ -265,7 +285,7 @@ namespace Stat
                     if (t.Series.IoBaseline == null) t.Series.IoBaseline = (double[])ioNow.Clone();
                     t.Series.IoLatest = ioNow;
                 });
-                return;
+                return null;
             }
 
             var s = new Sample { T = sampleTime };
@@ -297,6 +317,7 @@ namespace Stat
 
             _store.Update(() => t.Series.IoLatest = ioNow);
             _store.AddSample(t.Series, s);
+            return s;
         }
 
         /// <summary>Records an event only when a target's status changes.</summary>
@@ -311,6 +332,6 @@ namespace Stat
         private static bool HasExited(SafeProcessHandle handle) =>
             Native.GetProcessTimes(handle, out _, out long exitTime, out _, out _) && exitTime != 0;
 
-        private static string Label(ProcessSeries s) => $"{s.Name} (PID {s.Pid})";
+        private static string Label(ProcessSeries s) => $"{s.DisplayName} (PID {s.Pid})";
     }
 }

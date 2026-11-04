@@ -30,11 +30,16 @@ namespace Stat
             catch (ArgumentException ex)
             {
                 Console.Error.WriteLine("Error: " + ex.Message);
-                Console.Error.WriteLine("Run 'stat.exe --help' for usage.");
+                Console.Error.WriteLine($"Run '{Brand.Exe} --help' for usage.");
                 return 1;
             }
 
-            if (options.ShowVersion) { Console.WriteLine("stat " + version); return 0; }
+            if (options.ShowVersion)
+            {
+                Console.WriteLine($"{Brand.Product} {version}");
+                Console.WriteLine($"Built by {Brand.Author} - {Brand.RepoUrl}");
+                return 0;
+            }
             if (options.ShowHelp || (options.Pids.Count == 0 && options.Ports.Count == 0))
             {
                 Console.WriteLine(Options.Usage);
@@ -58,7 +63,7 @@ namespace Stat
                 Host = Environment.MachineName,
                 Os = WindowsVersion(),
                 Version = version,
-                CommandLine = "stat.exe " + string.Join(" ", args),
+                CommandLine = Brand.Exe + " " + string.Join(" ", args),
                 Cores = Environment.ProcessorCount,
                 Admin = admin,
                 IntervalSeconds = options.IntervalSeconds,
@@ -70,6 +75,7 @@ namespace Stat
                 ReportPath = options.OutFile,
             };
             var store = new Store(run);
+            foreach (var label in options.Labels) store.SetTargetLabel(label.Key, label.Value);
             store.EventAdded += e =>
                 Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {(e.Level == "warn" ? "! " : "")}{e.Message}");
 
@@ -106,7 +112,8 @@ namespace Stat
             _ctrlHandler = OnConsoleCtrl;
             Native.SetConsoleCtrlHandler(_ctrlHandler, true);
 
-            Console.WriteLine($"stat {version} - {run.Cores} logical processors, interval {options.IntervalSeconds:0.###} s");
+            Console.WriteLine($"{Brand.Product} {version} by {Brand.Author} - {Brand.RepoUrl}");
+            Console.WriteLine($"{run.Cores} logical processors, interval {options.IntervalSeconds:0.###} s");
             Console.WriteLine($"Dashboard: {dashboard}");
             if (!IPAddress.IsLoopback(options.UiHost))
                 Console.WriteLine($"           (reachable from other machines on port {options.UiPort})");

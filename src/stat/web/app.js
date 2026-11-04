@@ -5,6 +5,7 @@
   // Metric slots, matching Store.cs: raw point = [t, ...8 values]; bucket = [t, n, avg x8, min x8, max x8].
   const M = { cpu: 0, ws: 1, priv: 2, threads: 3, handles: 4, ioR: 5, ioW: 6, ioO: 7 };
   const METRIC_COUNT = 8;
+  const TOTAL = 'total'; // key of the series that adds up every monitored process (Store.TotalKey)
   const RECENT_KEEP_MS = 15 * 60 * 1000 + 30 * 1000;
 
   // CPU is the recorder strip (pens labelled); the rest are small multiples grouped by kind.
@@ -109,7 +110,10 @@
     render();
   }
   function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
-  function colorFor(proc) { return proc && proc.color >= 0 ? cssVar('--series-' + (proc.color + 1)) : cssVar('--series-neutral'); }
+  function colorFor(proc) {
+    if (proc && proc.total) return cssVar('--ink');
+    return proc && proc.color >= 0 ? cssVar('--series-' + (proc.color + 1)) : cssVar('--series-neutral');
+  }
   function withAlpha(hex, a) {
     const h = hex.replace('#', '');
     const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16);
@@ -118,14 +122,20 @@
 
   // ---------------------------------------------------------------- data
 
-  function labelOf(p) { return p.name + ' (' + p.pid + ')'; }
+  /** Name with the user's label appended, e.g. "node:be". */
+  function displayName(p) { return p.label ? p.name + ':' + p.label : p.name; }
+  function labelOf(p) { return p.total ? 'Total' : displayName(p) + ' (' + p.pid + ')'; }
 
   function setProcesses(list) {
     for (const p of list) {
-      if (!state.procs.has(p.k)) state.order.push(p.k);
+      // The Total is kept in procs but not in order: it is not a process and has no palette colour.
+      if (!p.total && !state.procs.has(p.k)) state.order.push(p.k);
       state.procs.set(p.k, p);
     }
   }
+
+  /** The Total only adds information once there is more than one process to add up. */
+  function showTotal() { return state.order.length > 1 && state.procs.has(TOTAL); }
 
   function addEvents(list) {
     if (!list || !list.length) return;
@@ -199,7 +209,11 @@
     return { line, lo, hi, aggregated: width > 0 };
   }
 
-  function visibleKeys() { return state.order.filter(k => !state.hidden.has(k)); }
+  function visibleKeys() {
+    const keys = state.order.filter(k => !state.hidden.has(k));
+    if (showTotal() && !state.hidden.has(TOTAL)) keys.push(TOTAL); // drawn last, on top
+    return keys;
+  }
 
   /** Time extent of whatever the charts are showing. */
   function xExtent() {
@@ -518,7 +532,8 @@
         }
         datasets.push({
           key: k, label: labelOf(proc), data: pts.line,
-          borderColor: color, backgroundColor: color, borderWidth: def.hero ? 2 : 1.75,
+          borderColor: color, backgroundColor: color, borderWidth: (def.hero ? 2 : 1.75) + (proc.total ? 0.25 : 0),
+          borderDash: proc.total ? [7, 4] : undefined,
           pointRadius: 0, pointHoverRadius: 4,
           pointHoverBackgroundColor: color, pointHoverBorderColor: C.paper, pointHoverBorderWidth: 2,
           spanGaps: false, tension: 0, fill: false,
@@ -581,6 +596,7 @@
     }
 
     const note = [];
+    if (Date.now() < flashUntil) note.push(flashMsg);
     if (aggregatedAny) note.push('Each point averages a time bucket' + (state.showBand ? '; the shaded band shows its range.' : '.'));
     note.push(state.zoom ? 'Double-click a chart to reset the zoom.' : 'Drag across a chart to zoom.');
     $('viewNote').textContent = note.join(' ');
@@ -600,6 +616,76 @@
   function toggleProcess(key) {
     if (state.hidden.has(key)) state.hidden.delete(key); else state.hidden.add(key);
     render();
+  }
+
+  // A short message shown in the chart controls bar, e.g. when a label could not be saved.
+  let flashMsg = '', flashUntil = 0;
+  function flash(msg) { flashMsg = msg; flashUntil = Date.now() + 8000; render(); setTimeout(scheduleRender, 8100); }
+
+  // ---------------------------------------------------------------- labels (live only)
+
+  /** Sends a label to process-monitor.exe, which keeps it for every browser and the report. Empty removes it. */
+  function saveLabel(k, text) {
+    const p = state.procs.get(k);
+    if (!p || text.trim() === (p.label || '')) return;
+    fetch('api/label', {
+      method: 'POST', cache: 'no-store',
+      // The custom header makes the server reject posts from other websites (they would need a CORS preflight).
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Monitor-Request': '1' },
+      body: new URLSearchParams({ k: k, label: text }).toString(),
+    })
+      .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(d => { const cur = state.procs.get(k); if (cur) cur.label = d.label; render(); })
+      .catch(err => flash('Could not save the label (' + err.message + '). Check that process-monitor.exe is still running.'));
+  }
+
+  /** Adds the "Add label" button and its inline editor to a process row. */
+  function attachLabelEditor(tr, k) {
+    const cell = tr.children[1];
+    const key = cell.querySelector('.key');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'relabel';
+    key.appendChild(btn);
+
+    const form = document.createElement('form');
+    form.className = 'label-form';
+    form.hidden = true;
+    form.innerHTML = '<span class="base"></span><input type="text" maxlength="32" autocomplete="off" spellcheck="false" placeholder="be">' +
+      '<span class="hint">Enter saves, Esc cancels, empty removes</span>';
+    cell.insertBefore(form, cell.querySelector('.pmeta'));
+    const input = form.querySelector('input');
+
+    let editing = false;
+    const close = () => { editing = false; form.hidden = true; key.hidden = false; };
+    btn.addEventListener('click', () => {
+      const p = state.procs.get(k);
+      form.querySelector('.base').textContent = p.name + ':';
+      input.value = p.label || '';
+      input.setAttribute('aria-label', 'Label for ' + p.name + ' (PID ' + p.pid + ')');
+      key.hidden = true;
+      form.hidden = false;
+      editing = true;
+      input.focus();
+      input.select();
+    });
+    form.addEventListener('submit', e => {
+      e.preventDefault();
+      if (!editing) return;
+      const v = input.value;
+      close();
+      btn.focus();
+      saveLabel(k, v);
+    });
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { e.preventDefault(); close(); btn.focus(); }
+    });
+    input.addEventListener('blur', () => {
+      if (!editing) return;
+      const v = input.value;
+      close();
+      saveLabel(k, v);
+    });
   }
 
   // ---------------------------------------------------------------- masthead, roster, logbook
@@ -646,6 +732,24 @@
     renderClock();
   }
 
+  /** Footer credit "Built by <author> · <repo link>", from the run info so the exe is the single source.
+   *  Built once, not on every render, so the link is never replaced under the pointer. */
+  function renderCredit() {
+    const r = state.run, credit = $('credit');
+    if (credit.childElementCount || !r.author) return;
+    const who = document.createElement('b');
+    who.textContent = r.author;
+    credit.append('Built by ', who);
+    if (r.repo && /^https:\/\//.test(r.repo)) {
+      const a = document.createElement('a');
+      a.href = r.repo;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = r.repo.replace(/^https:\/\//, '');
+      credit.append(' \u00b7 ', a);
+    }
+  }
+
   /** Latest values for a process: the newest raw sample (live) or the last point of the run (report). */
   function latestOf(key) {
     const rec = state.recent.get(key);
@@ -658,7 +762,7 @@
     return null;
   }
 
-  const STATUS_TEXT = { running: 'running', exited: 'exited', 'not-listening': 'stopped listening', unavailable: 'access lost' };
+  const STATUS_TEXT = { running: 'running', exited: 'exited', 'not-listening': 'stopped listening', unavailable: 'access lost', stopped: 'all stopped' };
   const LAMP_FOR = { running: 'on', exited: 'fault' };
 
   function signedMB(v) {
@@ -667,67 +771,96 @@
     return (v > 0 ? '+' : '−') + fmtMB(Math.abs(v));
   }
 
+  function makeRow(k) {
+    const tr = document.createElement('tr');
+    tr.dataset.key = k;
+    for (let i = 0; i < 14; i++) tr.appendChild(document.createElement('td'));
+    const key = document.createElement('label');
+    key.className = 'key';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.addEventListener('change', () => toggleProcess(k));
+    const ink = document.createElement('span');
+    ink.className = 'ink';
+    key.append(cb, ink);
+    tr.children[0].appendChild(key);
+    tr.children[1].className = 'name-col';
+    tr.children[1].innerHTML = '<span class="key"><span class="lamp"></span><span class="pname"></span></span><span class="pmeta"></span>';
+    if (k !== TOTAL && state.mode === 'live') attachLabelEditor(tr, k);
+    for (let i = 2; i < 14; i++) tr.children[i].className = 'num';
+    return tr;
+  }
+
+  function fillRow(tr, k, p) {
+    const c = tr.children;
+    const shown = !state.hidden.has(k);
+    tr.classList.toggle('lifted', !shown);
+    const cb = c[0].querySelector('input');
+    cb.checked = shown;
+    cb.setAttribute('aria-label', 'Show ' + labelOf(p) + ' on the charts');
+    const ink = c[0].querySelector('.ink');
+    ink.classList.toggle('dashed', !!p.total);
+    ink.style.color = colorFor(p);
+    ink.style.background = p.total ? '' : colorFor(p);
+
+    const lamp = c[1].querySelector('.lamp');
+    lamp.className = 'lamp' + (LAMP_FOR[p.status] ? ' ' + LAMP_FOR[p.status] : '');
+    lamp.title = STATUS_TEXT[p.status] || p.status;
+    c[1].querySelector('.pname').textContent = p.total ? 'Total' : displayName(p);
+    let meta;
+    if (p.total) {
+      meta = 'Sum of all ' + state.order.length + ' processes at each sample';
+      if (p.status !== 'running') meta += ', ' + (STATUS_TEXT[p.status] || p.status);
+    } else {
+      // Sources look like "pid", "port 5057" or "pid, port 5057".
+      const ports = p.source.split(', ').filter(s => s !== 'pid');
+      meta = 'PID ' + p.pid + (ports.length ? ' on ' + ports.join(' and ') : '');
+      if (p.status !== 'running') meta += ', ' + (STATUS_TEXT[p.status] || p.status) + (p.endedAt ? ' at ' + fmtTime(p.endedAt) : '');
+    }
+    c[1].querySelector('.pmeta').textContent = meta;
+    const relabel = c[1].querySelector('.relabel');
+    if (relabel) {
+      relabel.hidden = !!state.run.endedAt; // the server is gone once the run has stopped
+      relabel.textContent = p.label ? 'Edit label' : 'Add label';
+      relabel.setAttribute('aria-label', (p.label ? 'Edit the label of ' : 'Add a label to ') + labelOf(p));
+    }
+
+    const has = p.n > 0, now = latestOf(k);
+    c[2].textContent = now ? fmtPct(now[M.cpu]) : '-';
+    c[3].textContent = has ? fmtPct(p.cpuAvg) : '-';
+    c[4].textContent = has ? fmtPct(p.cpuP95) : '-';
+    c[5].textContent = has ? fmtPct(p.cpuMax) : '-';
+    c[5].title = has ? fmtCores(coresOf(p.cpuMax)) + ' cores' : '';
+    c[6].textContent = now ? fmtMB(now[M.ws]) : '-';
+    c[7].textContent = has ? fmtMB(p.wsMax) : '-';
+    c[8].textContent = now ? fmtMB(now[M.priv]) : '-';
+    c[9].textContent = has ? signedMB(p.privLast - p.privFirst) : '-';
+    c[9].title = has ? 'from ' + fmtMB(p.privFirst) + ' to ' + fmtMB(p.privLast) + ', peak ' + fmtMB(p.privMax) : '';
+    c[10].textContent = now ? fmtInt(now[M.threads]) : '-';
+    c[10].title = has ? 'peak ' + fmtInt(p.threadsMax) : '';
+    c[11].textContent = now ? fmtInt(now[M.handles]) : '-';
+    c[11].title = has ? 'peak ' + fmtInt(p.handlesMax) : '';
+    c[12].textContent = fmtBytes(p.ioReadTotal);
+    c[13].textContent = fmtBytes(p.ioWriteTotal);
+  }
+
   function renderTable() {
     const tbody = document.querySelector('#procTable tbody');
+    const tfoot = document.querySelector('#procTable tfoot');
     const finished = state.mode === 'report' || !!state.run.endedAt;
     document.querySelectorAll('#procTable .now-label').forEach(th => { th.textContent = finished ? 'at end' : 'now'; });
     $('procEmpty').hidden = state.order.length > 0;
     for (const k of state.order) {
-      const p = state.procs.get(k);
       let tr = tbody.querySelector('tr[data-key="' + CSS.escape(k) + '"]');
-      if (!tr) {
-        tr = document.createElement('tr');
-        tr.dataset.key = k;
-        for (let i = 0; i < 14; i++) tr.appendChild(document.createElement('td'));
-        const key = document.createElement('label');
-        key.className = 'key';
-        const cb = document.createElement('input');
-        cb.type = 'checkbox';
-        cb.addEventListener('change', () => toggleProcess(k));
-        const ink = document.createElement('span');
-        ink.className = 'ink';
-        key.append(cb, ink);
-        tr.children[0].appendChild(key);
-        tr.children[1].className = 'name-col';
-        tr.children[1].innerHTML = '<span class="key"><span class="lamp"></span><span class="pname"></span></span><span class="pmeta"></span>';
-        for (let i = 2; i < 14; i++) tr.children[i].className = 'num';
-        tbody.appendChild(tr);
-      }
-      const c = tr.children;
-      const shown = !state.hidden.has(k);
-      tr.classList.toggle('lifted', !shown);
-      const cb = c[0].querySelector('input');
-      cb.checked = shown;
-      cb.setAttribute('aria-label', 'Show ' + labelOf(p) + ' on the charts');
-      c[0].querySelector('.ink').style.background = colorFor(p);
-
-      const lamp = c[1].querySelector('.lamp');
-      lamp.className = 'lamp' + (LAMP_FOR[p.status] ? ' ' + LAMP_FOR[p.status] : '');
-      lamp.title = STATUS_TEXT[p.status] || p.status;
-      c[1].querySelector('.pname').textContent = p.name;
-      // Sources look like "pid", "port 5057" or "pid, port 5057".
-      const ports = p.source.split(', ').filter(s => s !== 'pid');
-      let meta = 'PID ' + p.pid + (ports.length ? ' on ' + ports.join(' and ') : '');
-      if (p.status !== 'running') meta += ', ' + (STATUS_TEXT[p.status] || p.status) + (p.endedAt ? ' at ' + fmtTime(p.endedAt) : '');
-      c[1].querySelector('.pmeta').textContent = meta;
-
-      const has = p.n > 0, now = latestOf(k);
-      c[2].textContent = now ? fmtPct(now[M.cpu]) : '-';
-      c[3].textContent = has ? fmtPct(p.cpuAvg) : '-';
-      c[4].textContent = has ? fmtPct(p.cpuP95) : '-';
-      c[5].textContent = has ? fmtPct(p.cpuMax) : '-';
-      c[5].title = has ? fmtCores(coresOf(p.cpuMax)) + ' cores' : '';
-      c[6].textContent = now ? fmtMB(now[M.ws]) : '-';
-      c[7].textContent = has ? fmtMB(p.wsMax) : '-';
-      c[8].textContent = now ? fmtMB(now[M.priv]) : '-';
-      c[9].textContent = has ? signedMB(p.privLast - p.privFirst) : '-';
-      c[9].title = has ? 'from ' + fmtMB(p.privFirst) + ' to ' + fmtMB(p.privLast) + ', peak ' + fmtMB(p.privMax) : '';
-      c[10].textContent = now ? fmtInt(now[M.threads]) : '-';
-      c[10].title = has ? 'peak ' + fmtInt(p.threadsMax) : '';
-      c[11].textContent = now ? fmtInt(now[M.handles]) : '-';
-      c[11].title = has ? 'peak ' + fmtInt(p.handlesMax) : '';
-      c[12].textContent = fmtBytes(p.ioReadTotal);
-      c[13].textContent = fmtBytes(p.ioWriteTotal);
+      if (!tr) { tr = makeRow(k); tbody.appendChild(tr); }
+      fillRow(tr, k, state.procs.get(k));
+    }
+    const total = showTotal() ? state.procs.get(TOTAL) : null;
+    tfoot.hidden = !total;
+    if (total) {
+      let tr = tfoot.firstElementChild;
+      if (!tr) { tr = makeRow(TOTAL); tr.classList.add('total-row'); tfoot.appendChild(tr); }
+      fillRow(tr, TOTAL, total);
     }
   }
 
@@ -766,11 +899,41 @@
   function renderFooter() {
     const f = $('footer');
     f.textContent = '';
-    let text = 'Generated by stat ' + state.run.version;
+    const r = state.run;
+    let text = 'Generated by ' + (r.product || 'process-monitor') + ' ' + r.version;
     if (state.mode === 'report' && state.generatedAt) text += ' on ' + fmtDateTime(state.generatedAt) + ' ' + utcLabel();
-    text += '. ' + state.run.host + ' runs ' + state.run.os + '. Command: ' + state.run.commandLine +
-      '. Charts by Chart.js (MIT licence); type is B612 (SIL Open Font License).';
+    text += '. ' + r.host + ' runs ' + r.os + '. Charts by Chart.js (MIT licence); type is B612 (SIL Open Font License).';
     f.textContent = text;
+    // The command line keeps its node (and Copy button) between renders; only the text is set.
+    if ($('commandLine').textContent !== r.commandLine) $('commandLine').textContent = r.commandLine;
+    renderCredit();
+  }
+
+  /** Copies the run's command line, falling back to a hidden textarea where the Clipboard API is unavailable. */
+  function copyCommand() {
+    const text = state.run ? state.run.commandLine : '';
+    const btn = $('copyCommand');
+    const done = ok => {
+      btn.textContent = ok ? 'Copied' : 'Copy failed';
+      clearTimeout(copyCommand.timer);
+      copyCommand.timer = setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+    };
+    const fallback = () => {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      ta.remove();
+      btn.focus();
+      done(ok);
+    };
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(() => done(true), fallback);
+    else fallback();
   }
 
   function render() {
@@ -825,6 +988,7 @@
       if (mq.addEventListener) mq.addEventListener('change', onChange); else if (mq.addListener) mq.addListener(onChange);
     }
     $('exportCsv').addEventListener('click', exportCsv);
+    $('copyCommand').addEventListener('click', copyCommand);
   }
 
   // ---------------------------------------------------------------- CSV export (report)
@@ -837,17 +1001,18 @@
 
   function exportCsv() {
     const names = ['CPU_Percent', 'RAM_MB', 'Private_MB', 'Threads', 'Handles', 'IO_Read_BytesPerSec', 'IO_Write_BytesPerSec', 'IO_Other_BytesPerSec'];
-    const aggregated = state.order.some(k => state.series[k] && state.series[k].width > 0);
-    const header = ['Time', 'PID', 'Process', 'Source', 'BucketSec', 'Samples', 'CPU_Cores'].concat(names);
+    const keys = state.order.concat(state.series[TOTAL] && showTotal() ? [TOTAL] : []);
+    const aggregated = keys.some(k => state.series[k] && state.series[k].width > 0);
+    const header = ['Time', 'PID', 'Process', 'Label', 'Source', 'BucketSec', 'Samples', 'CPU_Cores'].concat(names);
     if (aggregated) names.forEach(n => header.push(n + '_Min', n + '_Max'));
     const rows = [header.join(',')];
-    for (const k of state.order) {
+    for (const k of keys) {
       const p = state.procs.get(k), s = state.series[k];
-      if (!s) continue;
+      if (!s || !p) continue;
       for (const pt of s.points) {
         const isBucket = pt.length > 9;
         const vals = isBucket ? pt.slice(2, 2 + METRIC_COUNT) : pt.slice(1, 1 + METRIC_COUNT);
-        const row = [fmtStamp(pt[0]), p.pid, p.name, p.source, isBucket ? s.width / 1000 : 0, isBucket ? pt[1] : 1,
+        const row = [fmtStamp(pt[0]), p.total ? '' : p.pid, p.name, p.label || '', p.total ? 'sum of all processes' : p.source, isBucket ? s.width / 1000 : 0, isBucket ? pt[1] : 1,
           coresOf(vals[0]) == null ? '' : Math.round(coresOf(vals[0]) * 100) / 100].concat(vals);
         if (aggregated) {
           for (let m = 0; m < METRIC_COUNT; m++) {
@@ -860,7 +1025,7 @@
     const blob = new Blob([rows.join('\r\n') + '\r\n'], { type: 'text/csv;charset=utf-8' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'stat-' + state.run.host + '-' + fmtDate(state.run.startedAt) + '.csv';
+    a.download = 'process-monitor-' + state.run.host + '-' + fmtDate(state.run.startedAt) + '.csv';
     document.body.appendChild(a);
     a.click();
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
@@ -927,7 +1092,7 @@
       })
       .catch(() => {
         $('lamp').className = 'lamp fault';
-        $('stationText').textContent = 'Cannot reach stat.exe. Check that it is still running, then reload this page.';
+        $('stationText').textContent = 'Cannot reach process-monitor.exe. Check that it is still running, then reload this page.';
       });
   }
 

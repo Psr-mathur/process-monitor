@@ -91,7 +91,10 @@ namespace Stat
         public long LastSample;
         public long? EndedAt;
         public string Status = "running"; // running | exited | not-listening | unavailable
-        public int Color;          // categorical slot, fixed for the life of the run
+        public int Color;          // categorical slot, fixed for the life of the run; -2 = the Total series
+        public string Label;       // user text shown after the name, e.g. "be" in "node:be"
+
+        public string DisplayName => string.IsNullOrEmpty(Label) ? Name : Name + ":" + Label;
 
         // Full-resolution samples for the recent window, oldest first.
         public readonly List<Sample> Recent = new List<Sample>();
@@ -130,6 +133,7 @@ namespace Stat
     internal sealed class RunInfo
     {
         public string Host, Os, Version, CommandLine;
+        public string Product = Brand.Product, Author = Brand.Author, RepoUrl = Brand.RepoUrl;
         public int Cores;
         public bool Admin;
         public double IntervalSeconds;
@@ -149,21 +153,97 @@ namespace Stat
         public const int MaxSeriesPoints = 2000;
         private const int MaxEvents = 1000;
         private const int PaletteSize = 8;
+        public const string TotalKey = "total";
+        public const int MaxLabelLength = 32;
 
         private readonly object _lock = new object();
         private readonly Dictionary<string, ProcessSeries> _series = new Dictionary<string, ProcessSeries>();
         private readonly List<ProcessSeries> _order = new List<ProcessSeries>();
         private readonly List<StatEvent> _events = new List<StatEvent>();
         private int _eventsDropped;
+        // Labels by target ("port:4000" or "pid:21332"), so a process that restarts on the same port keeps its label.
+        private readonly Dictionary<string, string> _labels = new Dictionary<string, string>();
 
         public RunInfo Run { get; }
+
+        /// <summary>Sum of every monitored process, one sample per collection pass. Not part of _order.</summary>
+        public ProcessSeries Total { get; }
 
         /// <summary>Raised (outside the lock) with a JSON tick after each collection pass.</summary>
         public event Action<string> Tick;
         /// <summary>Raised for every event so the console can echo it.</summary>
         public event Action<StatEvent> EventAdded;
 
-        public Store(RunInfo run) { Run = run; }
+        public Store(RunInfo run)
+        {
+            Run = run;
+            Total = new ProcessSeries
+            {
+                Key = TotalKey, Name = "Total", Source = "", Color = -2, StartedAt = run.StartedAt,
+                ArchiveWidthMs = Math.Max(1000, (long)Math.Ceiling(run.IntervalSeconds * 1000)),
+            };
+        }
+
+        // ---- labels ---------------------------------------------------------------
+
+        /// <summary>Targets a process was found through: "pid:N" and/or "port:N".</summary>
+        private static IEnumerable<string> Targets(int pid, string source)
+        {
+            foreach (string part in (source ?? "").Split(new[] { ", " }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (part == "pid") yield return "pid:" + pid;
+                else if (part.StartsWith("port ", StringComparison.Ordinal)) yield return "port:" + part.Substring(5);
+            }
+        }
+
+        /// <summary>Trims a label to something safe to show: one line, no leading colon, at most <see cref="MaxLabelLength"/> characters.</summary>
+        public static string CleanLabel(string label)
+        {
+            if (label == null) return null;
+            var sb = new System.Text.StringBuilder(label.Length);
+            foreach (char c in label) sb.Append(char.IsControl(c) || char.IsWhiteSpace(c) ? ' ' : c);
+            string s = System.Text.RegularExpressions.Regex.Replace(sb.ToString(), " {2,}", " ").Trim().TrimStart(':').Trim();
+            if (s.Length > MaxLabelLength) s = s.Substring(0, MaxLabelLength).TrimEnd();
+            return s.Length == 0 ? null : s;
+        }
+
+        /// <summary>Sets a label from the command line, before monitoring starts.</summary>
+        public void SetTargetLabel(string target, string label)
+        {
+            lock (_lock) _labels[target] = CleanLabel(label);
+        }
+
+        /// <summary>The label for a newly found process: its ports first, then its PID.</summary>
+        public string LabelFor(int pid, string source)
+        {
+            lock (_lock)
+            {
+                foreach (string t in Targets(pid, source).OrderBy(t => t.StartsWith("pid:", StringComparison.Ordinal) ? 1 : 0))
+                    if (_labels.TryGetValue(t, out string label) && label != null) return label;
+                return null;
+            }
+        }
+
+        /// <summary>Labels a process from the dashboard. Returns false if <paramref name="key"/> is not a known process.</summary>
+        public bool SetLabel(string key, string label, long now, out string applied)
+        {
+            applied = CleanLabel(label);
+            string message;
+            lock (_lock)
+            {
+                if (!_series.TryGetValue(key, out var s)) return false;
+                // Also remembered for the process's port or PID, so a restart on the same port keeps it.
+                foreach (string t in Targets(s.Pid, s.Source)) _labels[t] = applied;
+                if (s.Label == applied) return true;
+                string before = s.DisplayName;
+                s.Label = applied;
+                message = applied == null
+                    ? $"Removed the label from {before} (PID {s.Pid})."
+                    : $"Labelled {before} (PID {s.Pid}) as {s.DisplayName}.";
+            }
+            AddEvent(now, "info", message);
+            return true;
+        }
 
         public ProcessSeries GetOrAddSeries(string key, Func<ProcessSeries> create)
         {
@@ -329,6 +409,9 @@ namespace Stat
         // ---- JSON ----------------------------------------------------------------
 
         /// <summary>Initial state for a newly connected dashboard: run info, processes, events, recent raw samples.</summary>
+        /// <summary>Every series written to the browser: the processes, then the Total.</summary>
+        private IEnumerable<ProcessSeries> AllSeries() => _order.Concat(new[] { Total });
+
         public string StateJson()
         {
             lock (_lock)
@@ -341,7 +424,7 @@ namespace Stat
                 j.Name("processes"); WriteProcesses(j);
                 j.Name("events"); WriteEvents(j, _events);
                 j.Name("recent").BeginObject();
-                foreach (var s in _order)
+                foreach (var s in AllSeries())
                 {
                     j.Name(s.Key).BeginArray();
                     foreach (var x in s.Recent) WriteRaw(j, x);
@@ -388,7 +471,7 @@ namespace Stat
         private void WriteSeries(Json j)
         {
             j.Name("series").BeginObject();
-            foreach (var s in _order)
+            foreach (var s in AllSeries())
             {
                 long width = SeriesPoints(s, out var buckets);
                 j.Name(s.Key).BeginObject().Prop("width", width).Name("points").BeginArray();
@@ -429,7 +512,8 @@ namespace Stat
                 .Prop("interval", r.IntervalSeconds, 3)
                 .Prop("startedAt", r.StartedAt).Prop("endedAt", r.EndedAt)
                 .Prop("utcOffsetMinutes", r.UtcOffsetMinutes)
-                .Prop("dashboard", r.Dashboard);
+                .Prop("dashboard", r.Dashboard)
+                .Prop("product", r.Product).Prop("author", r.Author).Prop("repo", r.RepoUrl);
             j.Name("pids").BeginArray(); foreach (int p in r.Pids) j.Value(p); j.EndArray();
             j.Name("ports").BeginArray(); foreach (int p in r.Ports) j.Value(p); j.EndArray();
             j.EndObject();
@@ -438,11 +522,13 @@ namespace Stat
         private void WriteProcesses(Json j)
         {
             j.BeginArray();
-            foreach (var s in _order)
+            foreach (var s in AllSeries())
             {
+                bool total = s == Total;
+                string status = !total ? s.Status : _order.Any(x => x.Status == "running") ? "running" : "stopped";
                 j.BeginObject()
-                    .Prop("k", s.Key).Prop("pid", s.Pid).Prop("name", s.Name).Prop("source", s.Source)
-                    .Prop("color", s.Color).Prop("status", s.Status)
+                    .Prop("k", s.Key).Prop("pid", s.Pid).Prop("name", s.Name).Prop("label", s.Label).Prop("source", s.Source)
+                    .Prop("color", s.Color).Prop("status", status).Prop("total", total)
                     .Prop("startedAt", s.StartedAt).Prop("firstSample", s.N > 0 ? s.FirstSample : (long?)null)
                     .Prop("lastSample", s.N > 0 ? s.LastSample : (long?)null).Prop("endedAt", s.EndedAt)
                     .Prop("n", s.N);
@@ -455,15 +541,25 @@ namespace Stat
                      .Prop("handlesLast", s.HandlesLast, 0).Prop("handlesMax", s.HandlesMax, 0)
                      .Prop("ioReadMax", s.IoReadMax, 0).Prop("ioWriteMax", s.IoWriteMax, 0);
                 }
-                if (s.IoBaseline != null && s.IoLatest != null)
-                {
-                    j.Prop("ioReadTotal", Math.Max(0, s.IoLatest[0] - s.IoBaseline[0]), 0)
-                     .Prop("ioWriteTotal", Math.Max(0, s.IoLatest[1] - s.IoBaseline[1]), 0)
-                     .Prop("ioOtherTotal", Math.Max(0, s.IoLatest[2] - s.IoBaseline[2]), 0);
-                }
+                var io = total ? IoTotals(_order) : IoTotals(new[] { s });
+                if (io != null)
+                    j.Prop("ioReadTotal", io[0], 0).Prop("ioWriteTotal", io[1], 0).Prop("ioOtherTotal", io[2], 0);
                 j.EndObject();
             }
             j.EndArray();
+        }
+
+        /// <summary>Bytes read, written and other over the run, summed over <paramref name="list"/>; null if none has counters yet.</summary>
+        private static double[] IoTotals(IEnumerable<ProcessSeries> list)
+        {
+            double[] sum = null;
+            foreach (var s in list)
+            {
+                if (s.IoBaseline == null || s.IoLatest == null) continue;
+                if (sum == null) sum = new double[3];
+                for (int i = 0; i < 3; i++) sum[i] += Math.Max(0, s.IoLatest[i] - s.IoBaseline[i]);
+            }
+            return sum;
         }
 
         private static void WriteEvents(Json j, IEnumerable<StatEvent> events)

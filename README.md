@@ -1,21 +1,25 @@
-# stat
+# process-monitor
 
-A single-file Windows process monitor. `stat.exe` samples CPU, memory, threads, handles and I/O for the processes you choose, shows them on a **live web dashboard**, and can write a **self-contained HTML report** when you stop it, similar to k6's web dashboard and report.
+Built by **Prakash Mathur** · [github.com/Psr-mathur/process-monitor](https://github.com/Psr-mathur/process-monitor)
 
-- One `stat.exe` (about 300 KB). No installer, no runtime to install, no internet access needed.
+A single-file Windows process monitor. `process-monitor.exe` samples CPU, memory, threads, handles and I/O for the processes you choose, shows them on a **live web dashboard**, and can write a **self-contained HTML report** when you stop it, similar to k6's web dashboard and report.
+
+- One `process-monitor.exe` (about 300 KB). No installer, no runtime to install, no internet access needed.
 - Pick processes by PID, by TCP listening port, or both.
+- A **Total** line and row adds up every monitored process, so you see their combined peak.
+- **Label** processes (`node:be`, `node:fe`) from the dashboard or the command line.
 - Live dashboard at `http://127.0.0.1:6565/` while it runs.
 - Optional HTML report (`--out=report.html`) that opens offline in any browser and can be shared as one file.
 
 ## Requirements
 
-- Windows 10 (1903 or later), Windows 11, or Windows Server 2022 or later. These include .NET Framework 4.8, which `stat.exe` uses. Older Windows Server versions work if .NET Framework 4.8 is installed.
+- Windows 10 (1903 or later), Windows 11, or Windows Server 2022 or later. These include .NET Framework 4.8, which `process-monitor.exe` uses. Older Windows Server versions work if .NET Framework 4.8 is installed.
 - Administrator rights are optional but recommended: without them, processes owned by other users or running as services may be inaccessible.
 
 ## Quick start
 
 ```cmd
-stat.exe --pid=21332,54342
+process-monitor.exe --pid=21332,54342
 ```
 
 Then open the dashboard URL it prints (`http://127.0.0.1:6565/`). Press `Ctrl+C` to stop.
@@ -23,13 +27,13 @@ Then open the dashboard URL it prints (`http://127.0.0.1:6565/`). Press `Ctrl+C`
 To also produce a report:
 
 ```cmd
-stat.exe --port=5000,1433 --out=report.html
+process-monitor.exe --port=5000,1433 --out=report.html
 ```
 
 ## Usage
 
 ```text
-stat.exe --pid=PID[,PID...] [--port=PORT[,PORT...]] [options]
+process-monitor.exe --pid=PID[,PID...] [--port=PORT[,PORT...]] [options]
 ```
 
 | Argument | Default | Description |
@@ -40,6 +44,7 @@ stat.exe --pid=PID[,PID...] [--port=PORT[,PORT...]] [options]
 | `--ui-port=PORT` | `6565` | Port for the live dashboard. |
 | `--ui-host=ADDRESS` | `127.0.0.1` | Address the dashboard binds to. Use `0.0.0.0` to allow other machines to connect. |
 | `--out=FILE.html` | | Also write an HTML report. Saved every 30 seconds and when monitoring stops. |
+| `--label=N:TEXT,N:TEXT` | | Label the process on port (or PID) `N`; it is shown as `name:TEXT`, e.g. `node:be`. The number must also be given in `--port` or `--pid`. |
 | `--help` | | Show usage. |
 | `--version` | | Show the version. |
 
@@ -49,23 +54,28 @@ Examples:
 
 ```cmd
 :: An Express.js app on port 5000 and SQL Server on 1433, sampled twice a second
-stat.exe --port=5000,1433 --interval=0.5
+process-monitor.exe --port=5000,1433 --interval=0.5
 
 :: Specific PIDs, report written to a file
-stat.exe --pid=21332,54342 --out=C:\perf\run-1.html
+process-monitor.exe --pid=21332,54342 --out=C:\perf\run-1.html
+
+:: Two Node.js apps with the same process name, told apart by labels
+process-monitor.exe --port=3000,4000 --label=3000:fe,4000:be
 
 :: Dashboard on a different port, reachable from other machines
-stat.exe --pid=21332 --ui-port=7000 --ui-host=0.0.0.0
+process-monitor.exe --pid=21332 --ui-port=7000 --ui-host=0.0.0.0
 ```
 
 Exit codes: `0` success, `1` bad arguments, `2` dashboard port or report file unavailable, `3` monitoring stopped unexpectedly.
 
 ## Live dashboard
 
-The dashboard always runs while `stat.exe` is monitoring. It is styled like an engineering pad: traces drawn on millimetre graph paper, with a status lamp and an elapsed-time clock at the top. It shows:
+The dashboard always runs while `process-monitor.exe` is monitoring. It is styled like an engineering pad: traces drawn on millimetre graph paper, with a status lamp and an elapsed-time clock at the top. It shows:
 
 - **CPU strip:** a wide chart where each process's trace ends in a pen labelled with its latest reading.
 - **Processes table:** the key for every chart. Each row shows the process's ink colour and status lamp, CPU now, average, p95 and peak, working set, private memory and its change since the start, threads, handles and I/O totals. Untick a process to hide it from all charts.
+- **Total:** when more than one process is monitored, a dashed **Total** line on every chart and a **Total** row under the table add up all of them. See [Total](#total).
+- **Labels:** **Add label** next to a process name opens a text box; type `be` and press Enter, and `node` becomes `node:be` everywhere. See [Labels](#labels).
 - **Small charts:** working set and private memory, threads and handles, and I/O read, write and other.
 - **Hover and zoom:** hover over any chart and every chart shows a crosshair and the values for all processes at that moment; drag across any chart to zoom all of them; double-click to reset.
 - **Time range:** last 1, 5 or 15 minutes, or the whole run.
@@ -73,14 +83,34 @@ The dashboard always runs while `stat.exe` is monitoring. It is styled like an e
 
 Several browsers can watch at once. A browser opened late still gets the history collected so far.
 
+The footer credits the author and links to the source repository.
+
 The light theme is green engineering paper and the dark theme is blueprint blue. They follow the system setting; the **Theme** button overrides it.
+
+## Total
+
+The Total adds up every monitored process at each sample: CPU, working set, private memory, threads, handles and I/O rates. `process-monitor.exe` computes it as it samples, so its peak, average and p95 are the real combined figures, not the sum of each process's peak (two processes rarely peak at the same moment). It is included in the HTML report and the CSV export.
+
+- It always covers **all** monitored processes. Unticking a process hides its line but does not change the Total; untick the Total row to hide the Total itself.
+- A process that exits drops out of the Total from then on. A newly found process joins it one interval after it is found, because its first read is only a baseline.
+- The Total is hidden while only one process is being monitored, since it would repeat that process.
+
+## Labels
+
+Processes often share a name (`node`, `java`, `dotnet`). A label is short text appended to the name: `node:be`, `node:fe`.
+
+- **In the dashboard:** click **Add label** (or **Edit label**) next to the name, type the text and press Enter. Esc cancels; saving an empty box removes the label. Every open browser sees the change at the next sample, the logbook records it, and the HTML report includes it.
+- **On the command line:** `--label=4000:be,3000:fe`. A number listed in `--port` labels whatever listens on that port; otherwise it must be one of the `--pid` values.
+- Labels stick to the port (or PID) the process was found through, so if the app on port 4000 restarts under a new PID, the new process is labelled `node:be` too.
+- Labels are up to 32 characters on one line. They only change what is displayed; they do not affect the process.
+- Labels last for the run. Use `--label` to set them again next time.
 
 ## HTML report
 
-With `--out=report.html`, `stat.exe` writes a single HTML file containing the whole run: run details, the processes table, all charts and the events list. It has no external dependencies, so it opens offline and can be emailed or attached to a ticket.
+With `--out=report.html`, `process-monitor.exe` writes a single HTML file containing the whole run: run details, the processes table, all charts and the events list. It has no external dependencies, so it opens offline and can be emailed or attached to a ticket.
 
 - The report is rewritten every 30 seconds and on `Ctrl+C`, `Ctrl+Break`, closing the console window, logoff or shutdown. Writes are atomic, so a crash leaves the last complete version.
-- **Export CSV** in the report downloads the data in the report as CSV. When the run was long enough to be bucketed (see below), each row is a time bucket with average, min and max columns.
+- **Export CSV** in the report downloads the data in the report as CSV, with a `Label` column and the Total's rows after the processes. When the run was long enough to be bucketed (see below), each row is a time bucket with average, min and max columns.
 - The report file is overwritten if it already exists.
 
 ## Metrics
@@ -100,13 +130,13 @@ How values are calculated:
 - CPU and I/O rates come from the change in each process's cumulative counters between two samples, divided by the time between the two reads.
 - Each counter is timestamped at the moment it is read, using a monotonic clock, so a slow pass or a system clock change does not distort rates.
 - Samples are scheduled against fixed deadlines, so time spent collecting does not make the sampling cadence drift. Windows sleep granularity (about 15 ms) still adds small jitter to individual samples.
-- `stat.exe` raises itself to High priority so busy target processes are less likely to delay sampling.
+- `process-monitor.exe` raises itself to High priority so busy target processes are less likely to delay sampling.
 - The first read of each process is only a baseline; its first point appears one interval later. Charts never show a made-up 0.
 - CPU is capped at 100%, because Windows credits CPU time in clock-tick chunks and very short samples can overshoot slightly.
 
 ## Long runs and memory use
 
-`stat.exe` keeps every sample for the most recent 15 minutes. Older samples are merged into time buckets that record the average, minimum and maximum, and buckets are widened as the run grows. Memory use and report size therefore stay roughly constant however long it runs.
+`process-monitor.exe` keeps every sample for the most recent 15 minutes. Older samples are merged into time buckets that record the average, minimum and maximum, and buckets are widened as the run grows. Memory use and report size therefore stay roughly constant however long it runs.
 
 The whole-run view and the report show at most about 2000 points per process. When a run is longer than that, each point is a bucket: the line is the average and the shaded band is the min-max range (toggle with **Show min-max range**). Tooltips show how many samples a point covers.
 
@@ -122,8 +152,14 @@ Summary figures in the cards and table (average, p95, max, totals) are calculate
 
 - By default the dashboard listens on `127.0.0.1` only, and rejects requests whose `Host` header isn't a loopback name. This stops other websites open in your browser from reading it.
 - `--ui-host=0.0.0.0` exposes process names, PIDs, resource usage and the command line to anyone who can reach the port. There is no authentication; use it only on trusted networks.
-- The dashboard is read-only: it accepts only `GET` requests and cannot control or change processes.
+- The dashboard cannot control or change processes. Its only write action is `POST /api/label`, which changes a display label. That request must carry an `X-Monitor-Request: 1` header, which browsers will not send from other websites, so a web page you visit cannot relabel your processes. With `--ui-host=0.0.0.0`, anyone who can reach the port can change labels.
 - The report contains the same information plus the full command line. Review it before sharing outside your team.
+
+## Author
+
+process-monitor is built by **Prakash Mathur**. Source, issues and releases: <https://github.com/Psr-mathur/process-monitor>.
+
+The executable carries the same details in **Properties > Details** (File description, Product name, Company, Copyright), and `process-monitor.exe --version` prints them.
 
 ## Building from source
 
@@ -134,13 +170,14 @@ cd src\stat
 dotnet build -c Release
 ```
 
-The executable is written to `src\stat\bin\Release\net48\stat.exe`. It is self-contained: the dashboard files and Chart.js are embedded in it.
+The executable is written to `src\stat\bin\Release\net48\process-monitor.exe`. It is self-contained: the dashboard files and Chart.js are embedded in it.
 
 Project layout:
 
 | Path | Contents |
 |---|---|
 | `src/stat/Program.cs` | Entry point, startup, shutdown handling |
+| `src/stat/Brand.cs` | Product name, author and repository link shown in the console, dashboard and report |
 | `src/stat/Options.cs` | Command-line parsing |
 | `src/stat/Collector.cs` | Sampling loop and rate calculations |
 | `src/stat/Native.cs` | Win32 calls (process counters, TCP listener table) |
@@ -153,9 +190,9 @@ Project layout:
 
 | Symptom | Fix |
 |---|---|
-| `port 6565 is already in use` | Another program (or another `stat.exe`) is using the port. Use `--ui-port=7000`. |
-| `Access denied to ... (PID n)` | Run `stat.exe` from an elevated (Administrator) prompt. |
-| `Nothing is listening on TCP port n` | The application isn't listening yet, or listens on a different port. `stat.exe` keeps checking. |
+| `port 6565 is already in use` | Another program (or another `process-monitor.exe`) is using the port. Use `--ui-port=7000`. |
+| `Access denied to ... (PID n)` | Run `process-monitor.exe` from an elevated (Administrator) prompt. |
+| `Nothing is listening on TCP port n` | The application isn't listening yet, or listens on a different port. `process-monitor.exe` keeps checking. |
 | Dashboard not reachable from another machine | Start with `--ui-host=0.0.0.0` and allow the port through Windows Firewall. |
 | SmartScreen warns about the exe | Expected for unsigned executables. Choose **More info > Run anyway**, or sign the binary. |
 

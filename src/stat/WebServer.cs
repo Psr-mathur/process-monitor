@@ -11,11 +11,24 @@ namespace Stat
 {
     /// <summary>
     /// Small HTTP server for the live dashboard. Built on TcpListener rather than HttpListener
-    /// so it needs no URL reservation or admin rights. GET only; Server-Sent Events for live data.
+    /// so it needs no URL reservation or admin rights. Server-Sent Events for live data.
+    /// Read-only except POST /api/label, which changes a display label and nothing else.
     /// </summary>
     internal sealed class WebServer
     {
         private const int MaxHeaderBytes = 16 * 1024;
+        private const int MaxBodyBytes = 4 * 1024;
+        // Browsers only send a custom header cross-origin after a CORS preflight, which this server never
+        // approves, so requiring it stops other websites from posting to the dashboard.
+        private const string RequestHeader = "X-Monitor-Request";
+
+        private sealed class Request
+        {
+            public string Method, Path;
+            public readonly Dictionary<string, string> Headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            public byte[] Body = new byte[0];
+            public string Header(string name) => Headers.TryGetValue(name, out string v) ? v : null;
+        }
         private static readonly TimeSpan HeartbeatEvery = TimeSpan.FromSeconds(15);
 
         private readonly Store _store;
@@ -101,24 +114,32 @@ namespace Stat
                 stream.ReadTimeout = 5000;
                 stream.WriteTimeout = 5000;
 
-                if (!ReadRequest(stream, out string method, out string path, out string hostHeader))
+                var request = ReadRequest(stream);
+                if (request == null)
                 {
                     Send(stream, 400, "text/plain", "Bad request");
                     return;
                 }
-                if (!HostAllowed(hostHeader))
+                if (!HostAllowed(request.Header("Host")))
                 {
                     Send(stream, 403, "text/plain", "Forbidden: unexpected Host header");
                     return;
                 }
-                if (method != "GET" && method != "HEAD")
-                {
-                    Send(stream, 405, "text/plain", "Method not allowed", "Allow: GET, HEAD\r\n");
-                    return;
-                }
 
+                string method = request.Method, path = request.Path;
                 int q = path.IndexOf('?');
                 if (q >= 0) path = path.Substring(0, q);
+
+                if (method == "POST" && path == "/api/label")
+                {
+                    HandleLabel(stream, request);
+                    return;
+                }
+                if (method != "GET" && method != "HEAD")
+                {
+                    Send(stream, 405, "text/plain", "Method not allowed", "Allow: GET, HEAD, POST\r\n");
+                    return;
+                }
                 bool head = method == "HEAD";
 
                 switch (path)
@@ -166,6 +187,38 @@ namespace Stat
             }
         }
 
+        /// <summary>POST /api/label with a form body "k=KEY&amp;label=TEXT". An empty label removes it.</summary>
+        private void HandleLabel(Stream stream, Request request)
+        {
+            if (request.Header(RequestHeader) != "1")
+            {
+                Send(stream, 403, "text/plain", "Forbidden: missing " + RequestHeader + " header");
+                return;
+            }
+            string key = null, label = null;
+            foreach (string pair in Encoding.UTF8.GetString(request.Body).Split('&'))
+            {
+                int eq = pair.IndexOf('=');
+                if (eq <= 0) continue;
+                string name = WebUtility.UrlDecode(pair.Substring(0, eq));
+                string value = WebUtility.UrlDecode(pair.Substring(eq + 1));
+                if (name == "k") key = value;
+                else if (name == "label") label = value;
+            }
+            if (string.IsNullOrEmpty(key) || label == null)
+            {
+                Send(stream, 400, "text/plain", "Expected k and label");
+                return;
+            }
+            long now = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
+            if (!_store.SetLabel(key, label, now, out string applied))
+            {
+                Send(stream, 404, "text/plain", "No such process");
+                return;
+            }
+            Send(stream, 200, "application/json; charset=utf-8", new Json(64).BeginObject().Prop("label", applied).EndObject().ToString());
+        }
+
         /// <summary>
         /// When bound to loopback, only accept loopback Host headers. This blocks DNS-rebinding
         /// attacks where a web page in the user's browser tries to read the dashboard.
@@ -179,34 +232,48 @@ namespace Stat
                 || (_port == 80 && (h == "127.0.0.1" || h == "localhost" || h == "[::1]"));
         }
 
-        private static bool ReadRequest(Stream stream, out string method, out string path, out string host)
+        /// <summary>Reads the request line, headers and (up to <see cref="MaxBodyBytes"/>) body. Null if malformed.</summary>
+        private static Request ReadRequest(Stream stream)
         {
-            method = path = host = null;
             var buffer = new byte[MaxHeaderBytes];
             int length = 0;
             while (true)
             {
-                if (length == buffer.Length) return false;
+                if (length == buffer.Length) return null;
                 int read = stream.Read(buffer, length, buffer.Length - length);
-                if (read <= 0) return false;
+                if (read <= 0) return null;
                 length += read;
+                // ASCII decoding maps each byte to one char, so char offsets are byte offsets.
                 string text = Encoding.ASCII.GetString(buffer, 0, length);
                 int end = text.IndexOf("\r\n\r\n", StringComparison.Ordinal);
                 if (end < 0) continue;
 
                 string[] lines = text.Substring(0, end).Split(new[] { "\r\n" }, StringSplitOptions.None);
                 string[] requestLine = lines[0].Split(' ');
-                if (requestLine.Length != 3 || !requestLine[2].StartsWith("HTTP/1.", StringComparison.Ordinal)) return false;
-                method = requestLine[0];
-                path = requestLine[1];
-                if (!path.StartsWith("/", StringComparison.Ordinal)) return false;
+                if (requestLine.Length != 3 || !requestLine[2].StartsWith("HTTP/1.", StringComparison.Ordinal)) return null;
+                var request = new Request { Method = requestLine[0], Path = requestLine[1] };
+                if (!request.Path.StartsWith("/", StringComparison.Ordinal)) return null;
                 for (int i = 1; i < lines.Length; i++)
                 {
                     int colon = lines[i].IndexOf(':');
-                    if (colon > 0 && lines[i].Substring(0, colon).Trim().Equals("Host", StringComparison.OrdinalIgnoreCase))
-                        host = lines[i].Substring(colon + 1).Trim();
+                    if (colon > 0) request.Headers[lines[i].Substring(0, colon).Trim()] = lines[i].Substring(colon + 1).Trim();
                 }
-                return true;
+
+                if (request.Header("Transfer-Encoding") != null) return null;
+                string lengthHeader = request.Header("Content-Length");
+                if (lengthHeader == null) return request;
+                if (!int.TryParse(lengthHeader, out int bodyLength) || bodyLength < 0 || bodyLength > MaxBodyBytes) return null;
+
+                request.Body = new byte[bodyLength];
+                int have = Math.Min(bodyLength, length - (end + 4));
+                Array.Copy(buffer, end + 4, request.Body, 0, have);
+                while (have < bodyLength)
+                {
+                    int n = stream.Read(request.Body, have, bodyLength - have);
+                    if (n <= 0) return null;
+                    have += n;
+                }
+                return request;
             }
         }
 

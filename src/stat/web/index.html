@@ -4,15 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>stat</title>
+<title>process-monitor</title>
 <link rel="stylesheet" href="fonts.css">
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
 <header class="masthead">
   <div class="ident">
-    <h1 class="wordmark">stat</h1>
-    <p class="station" role="status"><span id="lamp" class="lamp" aria-hidden="true"></span><span id="stationText">Connecting to stat.exe</span></p>
+    <h1 class="wordmark">process-monitor</h1>
+    <p class="station" role="status"><span id="lamp" class="lamp" aria-hidden="true"></span><span id="stationText">Connecting to process-monitor.exe</span></p>
   </div>
   <p class="clock"><span id="clock" class="clock-face">--:--:--</span> <span id="clockLabel" class="clock-label">elapsed</span></p>
   <p id="runSentence" class="run-sentence"></p>
@@ -48,7 +48,7 @@
   <section class="roster" aria-labelledby="rosterTitle">
     <div class="section-head">
       <h2 id="rosterTitle">Processes</h2>
-      <p class="unit">Untick a process to lift its pen off every chart. Peaks and totals cover the whole run.</p>
+      <p class="unit">Untick a process to lift its pen off every chart. Peaks and totals cover the whole run. Total adds up every monitored process at each sample, so its peak is the true combined peak.</p>
     </div>
     <div class="table-wrap">
       <table id="procTable">
@@ -79,6 +79,7 @@
           </tr>
         </thead>
         <tbody></tbody>
+        <tfoot></tfoot>
       </table>
       <p id="procEmpty" class="empty">No process found yet. Check the logbook below for why.</p>
     </div>
@@ -95,7 +96,11 @@
   </section>
 </main>
 
-<footer id="footer" class="footer"></footer>
+<footer class="footer">
+  <p id="credit" class="credit"></p>
+  <p id="footer"></p>
+  <p class="command"><span class="command-label">Command</span><code id="commandLine"></code><button id="copyCommand" type="button" class="btn quiet">Copy</button></p>
+</footer>
 
 <script src="chart.umd.min.js"></script>
 <!--STAT:DATA-->

@@ -42,7 +42,7 @@ namespace Stat
             {
                 long now = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
                 var run = _store.Run;
-                string title = $"stat report - {run.Host} - {DateTime.Now:yyyy-MM-dd HH:mm}";
+                string title = $"{Brand.Product} report - {run.Host} - {DateTime.Now:yyyy-MM-dd HH:mm}";
                 string html = Assets.ReportPage(_store.ReportJson(now), title);
 
                 string temp = _path + ".tmp";

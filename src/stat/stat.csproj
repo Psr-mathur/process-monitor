@@ -3,7 +3,7 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net48</TargetFramework>
-    <AssemblyName>stat</AssemblyName>
+    <AssemblyName>process-monitor</AssemblyName>
     <RootNamespace>Stat</RootNamespace>
     <LangVersion>9.0</LangVersion>
     <Nullable>disable</Nullable>
@@ -13,9 +13,15 @@
     <DebugType>embedded</DebugType>
     <GenerateSupportedRuntime>false</GenerateSupportedRuntime>
     <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
-    <Version>1.0.0</Version>
-    <Product>stat</Product>
-    <Description>Windows process monitor with a live web dashboard and HTML reports.</Description>
+    <Version>1.1.0</Version>
+    <!-- Shown in the exe's Properties > Details tab; AssemblyTitle is the "File description" Task Manager displays. -->
+    <Product>process-monitor</Product>
+    <AssemblyTitle>process-monitor by Prakash Mathur</AssemblyTitle>
+    <Description>Windows process monitor with a live web dashboard and HTML reports. Built by Prakash Mathur.</Description>
+    <Authors>Prakash Mathur</Authors>
+    <Company>Prakash Mathur</Company>
+    <Copyright>Copyright (c) 2026 Prakash Mathur</Copyright>
+    <RepositoryUrl>https://github.com/Psr-mathur/process-monitor</RepositoryUrl>
   </PropertyGroup>
 
   <ItemGroup>
