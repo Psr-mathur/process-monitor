@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>process-monitor</AssemblyName>
+    <RootNamespace>Stat</RootNamespace>
+    <LangVersion>9.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <DebugType>embedded</DebugType>
+    <GenerateSupportedRuntime>false</GenerateSupportedRuntime>
+    <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
+    <Version>1.1.0</Version>
+    <!-- Shown in the exe's Properties > Details tab; AssemblyTitle is the "File description" Task Manager displays. -->
+    <Product>process-monitor</Product>
+    <AssemblyTitle>process-monitor by Prakash Mathur</AssemblyTitle>
+    <Description>Windows process monitor with a live web dashboard and HTML reports. Built by Prakash Mathur.</Description>
+    <Authors>Prakash Mathur</Authors>
+    <Company>Prakash Mathur</Company>
+    <Copyright>Copyright (c) 2026 Prakash Mathur</Copyright>
+    <RepositoryUrl>https://github.com/Psr-mathur/process-monitor</RepositoryUrl>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Lets the .NET SDK build for .NET Framework without a targeting pack installed. Build-time only. -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="web\index.html" LogicalName="web/index.html" />
+    <EmbeddedResource Include="web\app.css" LogicalName="web/app.css" />
+    <EmbeddedResource Include="web\app.js" LogicalName="web/app.js" />
+    <EmbeddedResource Include="web\vendor\chart.umd.min.js" LogicalName="web/chart.umd.min.js" />
+    <EmbeddedResource Include="web\vendor\fonts\b612-400.woff2" LogicalName="web/fonts/b612-400.woff2" />
+    <EmbeddedResource Include="web\vendor\fonts\b612-700.woff2" LogicalName="web/fonts/b612-700.woff2" />
+  </ItemGroup>
+
+</Project>

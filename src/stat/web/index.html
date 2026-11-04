@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>process-monitor</title>
+<link rel="stylesheet" href="fonts.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="masthead">
+  <div class="ident">
+    <h1 class="wordmark">process-monitor</h1>
+    <p class="station" role="status"><span id="lamp" class="lamp" aria-hidden="true"></span><span id="stationText">Connecting to process-monitor.exe</span></p>
+  </div>
+  <p class="clock"><span id="clock" class="clock-face">--:--:--</span> <span id="clockLabel" class="clock-label">elapsed</span></p>
+  <p id="runSentence" class="run-sentence"></p>
+</header>
+
+<nav class="controls" aria-label="Chart controls">
+  <div id="rangeButtons" class="seg" role="group" aria-label="Time range">
+    <button type="button" data-range="60000">1 min</button>
+    <button type="button" data-range="300000">5 min</button>
+    <button type="button" data-range="900000">15 min</button>
+    <button type="button" data-range="run">Whole run</button>
+  </div>
+  <label class="check"><input type="checkbox" id="showBand" checked> Show min-max range</label>
+  <button id="resetZoom" type="button" class="btn" hidden>Reset zoom</button>
+  <span id="viewNote" class="note"></span>
+  <span class="spacer"></span>
+  <button id="exportCsv" type="button" class="btn" hidden>Export CSV</button>
+  <button id="themeToggle" type="button" class="btn quiet">Theme: auto</button>
+</nav>
+
+<main>
+  <section class="strip" aria-labelledby="cpuTitle">
+    <div class="section-head">
+      <h2 id="cpuTitle">CPU</h2>
+      <p class="unit">Share of total machine capacity. Each pen is labelled with its latest reading.</p>
+    </div>
+    <div class="strip-box">
+      <canvas id="chart-cpu" role="img" aria-label="CPU over time per process; values are listed in the Processes table."></canvas>
+      <p id="waiting" class="waiting">Waiting for the first sample. Each pen starts one interval after its process is found.</p>
+    </div>
+  </section>
+
+  <section class="roster" aria-labelledby="rosterTitle">
+    <div class="section-head">
+      <h2 id="rosterTitle">Processes</h2>
+      <p class="unit">Untick a process to lift its pen off every chart. Peaks and totals cover the whole run. Total adds up every monitored process at each sample, so its peak is the true combined peak.</p>
+    </div>
+    <div class="table-wrap">
+      <table id="procTable">
+        <thead>
+          <tr class="group">
+            <th scope="col" rowspan="2"><span class="sr-only">Show on charts</span></th>
+            <th scope="col" rowspan="2" class="name-col">Process</th>
+            <th scope="colgroup" colspan="4" class="num">CPU</th>
+            <th scope="colgroup" colspan="2" class="num">Working set</th>
+            <th scope="colgroup" colspan="2" class="num">Private memory</th>
+            <th scope="col" class="num">Threads</th>
+            <th scope="col" class="num">Handles</th>
+            <th scope="colgroup" colspan="2" class="num">I/O total</th>
+          </tr>
+          <tr class="sub">
+            <th scope="col" class="num now-label">now</th>
+            <th scope="col" class="num">avg</th>
+            <th scope="col" class="num">p95</th>
+            <th scope="col" class="num">peak</th>
+            <th scope="col" class="num now-label">now</th>
+            <th scope="col" class="num">peak</th>
+            <th scope="col" class="num now-label">now</th>
+            <th scope="col" class="num">change</th>
+            <th scope="col" class="num now-label">now</th>
+            <th scope="col" class="num now-label">now</th>
+            <th scope="col" class="num">read</th>
+            <th scope="col" class="num">written</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+        <tfoot></tfoot>
+      </table>
+      <p id="procEmpty" class="empty">No process found yet. Check the logbook below for why.</p>
+    </div>
+  </section>
+
+  <section id="multiples" class="multiples" aria-label="Memory, kernel object and I/O charts"></section>
+
+  <section class="logbook" aria-labelledby="logTitle">
+    <div class="section-head">
+      <h2 id="logTitle">Logbook</h2>
+      <p id="eventCount" class="unit"></p>
+    </div>
+    <ol id="events" class="events"></ol>
+  </section>
+</main>
+
+<footer class="footer">
+  <p id="credit" class="credit"></p>
+  <p id="footer"></p>
+  <p class="command"><span class="command-label">Command</span><code id="commandLine"></code><button id="copyCommand" type="button" class="btn quiet">Copy</button></p>
+</footer>
+
+<script src="chart.umd.min.js"></script>
+<!--STAT:DATA-->
+<script src="app.js"></script>
+</body>
+</html>

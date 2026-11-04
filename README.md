@@ -1,250 +1,204 @@
-Windows Process Statistics (stat.ps1)
+# process-monitor
 
-A lightweight PowerShell-based process monitoring utility for Windows that collects CPU, memory, thread, handle, and process I/O statistics at configurable intervals.
+Built by **Prakash Mathur** · [github.com/Psr-mathur/process-monitor](https://github.com/Psr-mathur/process-monitor)
 
-Monitor specific processes by PID, discover processes by TCP listening port, or combine both approaches. Metrics are written to a CSV file for analysis, dashboards, and integration with win-mpstat.
+A single-file Windows process monitor. `process-monitor.exe` samples CPU, memory, threads, handles and I/O for the processes you choose, shows them on a **live web dashboard**, and can write a **self-contained HTML report** when you stop it, similar to k6's web dashboard and report.
 
-Features
-Monitor multiple Windows processes simultaneously.
-Select processes by PID or TCP listening port.
-Calculate process CPU utilization percentage.
-Track cumulative CPU time.
-Monitor physical working-set memory and private memory.
-Record thread and handle counts.
-Calculate process I/O read, write, and other transfer rates.
-Configure the sampling interval.
-Export metrics to CSV for historical analysis.
-Rediscover processes listening on configured ports after application restarts.
-Requirements
-Windows 10, Windows 11, or Windows Server.
-Windows PowerShell 5.1 or a compatible PowerShell version.
-Permissions to query the target processes and their performance counters.
-Administrator privileges may be required for some processes or server configurations.
-Installation
-Save the script as stat.ps1.
-Open CMD or PowerShell.
-Navigate to the directory containing the script.
-Run the script with the desired arguments.
+- One `process-monitor.exe` (about 300 KB). No installer, no runtime to install, no internet access needed.
+- Pick processes by PID, by TCP listening port, or both.
+- A **Total** line and row adds up every monitored process, so you see their combined peak.
+- **Label** processes (`node:be`, `node:fe`) from the dashboard or the command line.
+- Live dashboard at `http://127.0.0.1:6565/` while it runs.
+- Optional HTML report (`--out=report.html`) that opens offline in any browser and can be shared as one file.
 
-Example:
+## Requirements
 
-cmd
-cd C:\Tools\win-mpstat
-powershell -NoProfile -ExecutionPolicy Bypass -File .\stat.ps1 --pid=21332,54342
+- Windows 10 (1903 or later), Windows 11, or Windows Server 2022 or later. These include .NET Framework 4.8, which `process-monitor.exe` uses. Older Windows Server versions work if .NET Framework 4.8 is installed.
+- Administrator rights are optional but recommended: without them, processes owned by other users or running as services may be inaccessible.
 
-Usage
-1. Monitor processes by PID
-cmd
-powershell -NoProfile -ExecutionPolicy Bypass -File .\stat.ps1 --pid=21332,54342,45634
+## Quick start
 
+```cmd
+process-monitor.exe --pid=21332,54342
+```
 
-The specified process IDs are monitored at the configured sampling interval.
+Then open the dashboard URL it prints (`http://127.0.0.1:6565/`). Press `Ctrl+C` to stop.
 
-2. Monitor processes by TCP port
-cmd
-powershell -NoProfile -ExecutionPolicy Bypass -File .\stat.ps1 --port=5000,1433
+To also produce a report:
 
+```cmd
+process-monitor.exe --port=5000,1433 --out=report.html
+```
 
-The script discovers the process IDs owning listening TCP sockets on the specified ports.
+## Usage
 
-Example use cases:
+```text
+process-monitor.exe --pid=PID[,PID...] [--port=PORT[,PORT...]] [options]
+```
 
-Port 5000: an Express.js application.
-Port 1433: a SQL Server instance using the default TCP port.
+| Argument | Default | Description |
+|---|---|---|
+| `--pid=PID,PID` | | Process IDs to monitor. Commas or spaces. |
+| `--port=PORT,PORT` | | Monitor whatever process is listening on these TCP ports (IPv4 and IPv6). |
+| `--interval=SECONDS` | `1` | Sampling interval. Decimals allowed, e.g. `0.5`. |
+| `--ui-port=PORT` | `6565` | Port for the live dashboard. |
+| `--ui-host=ADDRESS` | `127.0.0.1` | Address the dashboard binds to. Use `0.0.0.0` to allow other machines to connect. |
+| `--out=FILE.html` | | Also write an HTML report. Saved every 30 seconds and when monitoring stops. |
+| `--label=N:TEXT,N:TEXT` | | Label the process on port (or PID) `N`; it is shown as `name:TEXT`, e.g. `node:be`. The number must also be given in `--port` or `--pid`. |
+| `--help` | | Show usage. |
+| `--version` | | Show the version. |
 
-Important: Port numbers are examples. Confirm the actual listening ports on your server. If a reverse proxy owns a port, the discovered process may be the proxy rather than the application.
+At least one of `--pid` or `--port` is required. Values can be listed with spaces too: `--pid=21332 54342`.
 
-3. Monitor both PIDs and ports
-cmd
-powershell -NoProfile -ExecutionPolicy Bypass -File .\stat.ps1 --pid=21332,54342 --port=5000,1433
+Examples:
 
+```cmd
+:: An Express.js app on port 5000 and SQL Server on 1433, sampled twice a second
+process-monitor.exe --port=5000,1433 --interval=0.5
 
-The script combines explicitly supplied PIDs with processes discovered through the configured listening ports and removes duplicate PIDs.
+:: Specific PIDs, report written to a file
+process-monitor.exe --pid=21332,54342 --out=C:\perf\run-1.html
 
-4. Configure the sampling interval
+:: Two Node.js apps with the same process name, told apart by labels
+process-monitor.exe --port=3000,4000 --label=3000:fe,4000:be
 
-Use --interval to specify the interval in seconds.
+:: Dashboard on a different port, reachable from other machines
+process-monitor.exe --pid=21332 --ui-port=7000 --ui-host=0.0.0.0
+```
 
-cmd
-powershell -NoProfile -ExecutionPolicy Bypass -File .\stat.ps1 --port=5000,1433 --interval=1
+Exit codes: `0` success, `1` bad arguments, `2` dashboard port or report file unavailable, `3` monitoring stopped unexpectedly.
 
+## Live dashboard
 
-Example with a five-second interval:
+The dashboard always runs while `process-monitor.exe` is monitoring. It is styled like an engineering pad: traces drawn on millimetre graph paper, with a status lamp and an elapsed-time clock at the top. It shows:
 
-cmd
-powershell -NoProfile -ExecutionPolicy Bypass -File .\stat.ps1 --pid=21332 --interval=5
+- **CPU strip:** a wide chart where each process's trace ends in a pen labelled with its latest reading.
+- **Processes table:** the key for every chart. Each row shows the process's ink colour and status lamp, CPU now, average, p95 and peak, working set, private memory and its change since the start, threads, handles and I/O totals. Untick a process to hide it from all charts.
+- **Total:** when more than one process is monitored, a dashed **Total** line on every chart and a **Total** row under the table add up all of them. See [Total](#total).
+- **Labels:** **Add label** next to a process name opens a text box; type `be` and press Enter, and `node` becomes `node:be` everywhere. See [Labels](#labels).
+- **Small charts:** working set and private memory, threads and handles, and I/O read, write and other.
+- **Hover and zoom:** hover over any chart and every chart shows a crosshair and the values for all processes at that moment; drag across any chart to zoom all of them; double-click to reset.
+- **Time range:** last 1, 5 or 15 minutes, or the whole run.
+- **Logbook:** processes found, exited or inaccessible, and port listener changes. Warnings are marked in red.
 
+Several browsers can watch at once. A browser opened late still gets the history collected so far.
 
-The interval is a target sampling delay, not a guaranteed exact sampling frequency. Actual timing depends on command execution and Windows scheduling.
+The footer credits the author and links to the source repository.
 
-5. Specify the output CSV file
-cmd
-powershell -NoProfile -ExecutionPolicy Bypass -File .\stat.ps1 --port=5000,1433 --out=stem-stats.csv
+The light theme is green engineering paper and the dark theme is blueprint blue. They follow the system setting; the **Theme** button overrides it.
 
+## Total
 
-The default output file is:
+The Total adds up every monitored process at each sample: CPU, working set, private memory, threads, handles and I/O rates. `process-monitor.exe` computes it as it samples, so its peak, average and p95 are the real combined figures, not the sum of each process's peak (two processes rarely peak at the same moment). It is included in the HTML report and the CSV export.
 
-text
-process-log.csv
+- It always covers **all** monitored processes. Unticking a process hides its line but does not change the Total; untick the Total row to hide the Total itself.
+- A process that exits drops out of the Total from then on. A newly found process joins it one interval after it is found, because its first read is only a baseline.
+- The Total is hidden while only one process is being monitored, since it would repeat that process.
 
+## Labels
 
-The output path is relative to the current working directory unless an absolute path is specified.
+Processes often share a name (`node`, `java`, `dotnet`). A label is short text appended to the name: `node:be`, `node:fe`.
 
-6. Stop monitoring
+- **In the dashboard:** click **Add label** (or **Edit label**) next to the name, type the text and press Enter. Esc cancels; saving an empty box removes the label. Every open browser sees the change at the next sample, the logbook records it, and the HTML report includes it.
+- **On the command line:** `--label=4000:be,3000:fe`. A number listed in `--port` labels whatever listens on that port; otherwise it must be one of the `--pid` values.
+- Labels stick to the port (or PID) the process was found through, so if the app on port 4000 restarts under a new PID, the new process is labelled `node:be` too.
+- Labels are up to 32 characters on one line. They only change what is displayed; they do not affect the process.
+- Labels last for the run. Use `--label` to set them again next time.
 
-Press:
+## HTML report
 
-text
-Ctrl+C
+With `--out=report.html`, `process-monitor.exe` writes a single HTML file containing the whole run: run details, the processes table, all charts and the events list. It has no external dependencies, so it opens offline and can be emailed or attached to a ticket.
 
+- The report is rewritten every 30 seconds and on `Ctrl+C`, `Ctrl+Break`, closing the console window, logoff or shutdown. Writes are atomic, so a crash leaves the last complete version.
+- **Export CSV** in the report downloads the data in the report as CSV, with a `Label` column and the Total's rows after the processes. When the run was long enough to be bucketed (see below), each row is a time bucket with average, min and max columns.
+- The report file is overwritten if it already exists.
 
-The script stops collecting samples.
+## Metrics
 
-Command-Line Arguments
-Argument	Required	Description
---pid=PID1,PID2	One target option required	Comma-separated process IDs.
---port=PORT1,PORT2	One target option required	Comma-separated TCP listening ports.
---interval=SECONDS	No	Sampling interval in seconds. Default: 1.
---out=FILE	No	CSV output path. Default: process-log.csv.
+| Metric | Unit | Meaning |
+|---|---|---|
+| CPU | % | Share of **total machine capacity** (0-100). On 8 logical processors, one fully busy core is 12.5%. |
+| Cores | logical cores | CPU expressed as cores' worth used (CPU% x cores / 100). Shown in tooltips and the table. |
+| Working set | MB | Physical memory currently resident for the process. Goes up and down as Windows trims memory and as runtimes collect garbage. |
+| Private memory | MB | Committed memory private to the process. Steadier than working set; a better signal of real growth or leaks. |
+| Threads | count | Threads in the process. |
+| Handles | count | Open kernel handles. Steady growth often indicates a leak. |
+| I/O read / write / other | bytes/sec | Process-attributed I/O transfer rates. Includes cached, network and device I/O, so it is **not** the same as physical disk throughput. |
 
-At least one of --pid or --port must be supplied.
+How values are calculated:
 
-Arguments can be combined in one invocation.
+- CPU and I/O rates come from the change in each process's cumulative counters between two samples, divided by the time between the two reads.
+- Each counter is timestamped at the moment it is read, using a monotonic clock, so a slow pass or a system clock change does not distort rates.
+- Samples are scheduled against fixed deadlines, so time spent collecting does not make the sampling cadence drift. Windows sleep granularity (about 15 ms) still adds small jitter to individual samples.
+- `process-monitor.exe` raises itself to High priority so busy target processes are less likely to delay sampling.
+- The first read of each process is only a baseline; its first point appears one interval later. Charts never show a made-up 0.
+- CPU is capped at 100%, because Windows credits CPU time in clock-tick chunks and very short samples can overshoot slightly.
 
-Metrics Collected
+## Long runs and memory use
 
-Each CSV row represents one process sample.
+`process-monitor.exe` keeps every sample for the most recent 15 minutes. Older samples are merged into time buckets that record the average, minimum and maximum, and buckets are widened as the run grows. Memory use and report size therefore stay roughly constant however long it runs.
 
-Column	Unit	Description
-Time	Local timestamp	Time when the sample was collected.
-PID	Integer	Windows process identifier.
-Process	Name	Executable process name.
-CPU_Percent	Percentage	Process CPU utilization normalized to total logical CPU capacity.
-CPUSeconds	Seconds	Cumulative CPU execution time consumed by the process.
-RAM_MB	MB	Physical working-set memory.
-Private_MB	MB	Private memory attributed to the process.
-Threads	Count	Number of process threads.
-Handles	Count	Number of open process handles.
-IO_Read_BytesPerSec	Bytes/sec	Rate of process-attributed I/O read transfers.
-IO_Write_BytesPerSec	Bytes/sec	Rate of process-attributed I/O write transfers.
-IO_Other_BytesPerSec	Bytes/sec	Rate of other process-attributed I/O transfers.
-CPU percentage calculation
+The whole-run view and the report show at most about 2000 points per process. When a run is longer than that, each point is a bucket: the line is the average and the shaded band is the min-max range (toggle with **Show min-max range**). Tooltips show how many samples a point covers.
 
-The script calculates CPU utilization using the change in cumulative CPU time between consecutive samples:
+Summary figures in the cards and table (average, p95, max, totals) are calculated from every sample, not from the buckets.
 
-text
-CPU_Percent =
-    (CPUSeconds_Current - CPUSeconds_Previous)
-    / ElapsedSeconds
-    / LogicalProcessorCount
-    * 100
+## Process discovery
 
+- **By PID:** the process is opened once and its handle held, so if it exits it is reported as exited, and a later process reusing the same PID is **not** mistaken for it.
+- **By port:** listening sockets are re-read on every sample from the same table `netstat` uses. If the application restarts, its new PID is picked up automatically and shown as a separate row. If a reverse proxy owns the port, the proxy is what gets monitored.
+- A process that cannot be opened (not running, access denied) is reported once in the events list and retried on later samples.
 
-For example, on a machine with eight logical processors, a process consuming one full logical processor for one second reports approximately 12.5% of total machine capacity.
+## Security
 
-The first sample reports 0% because no previous sample is available.
+- By default the dashboard listens on `127.0.0.1` only, and rejects requests whose `Host` header isn't a loopback name. This stops other websites open in your browser from reading it.
+- `--ui-host=0.0.0.0` exposes process names, PIDs, resource usage and the command line to anyone who can reach the port. There is no authentication; use it only on trusted networks.
+- The dashboard cannot control or change processes. Its only write action is `POST /api/label`, which changes a display label. That request must carry an `X-Monitor-Request: 1` header, which browsers will not send from other websites, so a web page you visit cannot relabel your processes. With `--ui-host=0.0.0.0`, anyone who can reach the port can change labels.
+- The report contains the same information plus the full command line. Review it before sharing outside your team.
 
-This definition differs from tools that report one fully utilized logical processor as 100%.
+## Author
 
-Memory metrics
-RAM_MB measures the process working set, which represents physical memory currently resident for that process.
-Private_MB measures private memory attributed to the process.
+process-monitor is built by **Prakash Mathur**. Source, issues and releases: <https://github.com/Psr-mathur/process-monitor>.
 
-These metrics represent different aspects of memory and should not be treated as interchangeable.
+The executable carries the same details in **Properties > Details** (File description, Product name, Company, Copyright), and `process-monitor.exe --version` prints them.
 
-Process I/O metrics
+## Building from source
 
-The script derives I/O rates from differences in cumulative process I/O counters.
+Requires the .NET SDK 8 or later (the build targets .NET Framework 4.8; the SDK downloads the reference assemblies automatically).
 
-These are process-attributed I/O transfer rates, not guaranteed physical disk throughput. They may include cached or buffered operations and are not sufficient to calculate disk latency.
+```cmd
+cd src\stat
+dotnet build -c Release
+```
 
-For physical disk throughput, queue length, and latency, collect Windows physical-disk performance counters separately.
+The executable is written to `src\stat\bin\Release\net48\process-monitor.exe`. It is self-contained: the dashboard files and Chart.js are embedded in it.
 
-Example Output
-csv
-Time,PID,Process,CPU_Percent,CPUSeconds,RAM_MB,Private_MB,Threads,Handles,IO_Read_BytesPerSec,IO_Write_BytesPerSec,IO_Other_BytesPerSec
-2026-10-29 11:00:01.000,21332,node,12.50,45.62,185.25,142.10,24,512,2048,4096,0
-2026-10-29 11:00:02.000,21332,node,18.75,45.77,185.80,142.50,25,516,8192,1024,0
-2026-10-29 11:00:01.000,54342,sqlservr,25.00,120.50,2048.00,1850.00,145,2300,16384,32768,0
+Project layout:
 
+| Path | Contents |
+|---|---|
+| `src/stat/Program.cs` | Entry point, startup, shutdown handling |
+| `src/stat/Brand.cs` | Product name, author and repository link shown in the console, dashboard and report |
+| `src/stat/Options.cs` | Command-line parsing |
+| `src/stat/Collector.cs` | Sampling loop and rate calculations |
+| `src/stat/Native.cs` | Win32 calls (process counters, TCP listener table) |
+| `src/stat/Store.cs` | In-memory samples, buckets, summaries and JSON |
+| `src/stat/WebServer.cs` | Dashboard HTTP server and live event stream |
+| `src/stat/ReportWriter.cs` | HTML report writing |
+| `src/stat/web/` | Dashboard page, styles, script and vendored Chart.js |
 
-Note: The sample values above are illustrative and do not represent actual measurements. Rows from different processes are collected sequentially, so timestamps and effective sampling intervals may differ slightly.
+## Troubleshooting
 
-Monitoring Express.js Applications
+| Symptom | Fix |
+|---|---|
+| `port 6565 is already in use` | Another program (or another `process-monitor.exe`) is using the port. Use `--ui-port=7000`. |
+| `Access denied to ... (PID n)` | Run `process-monitor.exe` from an elevated (Administrator) prompt. |
+| `Nothing is listening on TCP port n` | The application isn't listening yet, or listens on a different port. `process-monitor.exe` keeps checking. |
+| Dashboard not reachable from another machine | Start with `--ui-host=0.0.0.0` and allow the port through Windows Firewall. |
+| SmartScreen warns about the exe | Expected for unsigned executables. Choose **More info > Run anyway**, or sign the binary. |
 
-For multiple Express.js applications running on the same Windows server, use their listening ports to identify the relevant processes.
+## Third-party software
 
-Example:
+The dashboard and reports include:
 
-cmd
-powershell -NoProfile -ExecutionPolicy Bypass -File .\stat.ps1 --port=5000 --interval=1 --out=stem-stats.csv
-
-
-This monitors the process or processes discovered through port 5000.
-
-If multiple applications use child processes, worker processes, or a reverse proxy, port ownership alone may not identify every process belonging to the application. Use a process-tree or application-specific discovery strategy when aggregating all workers.
-
-This script measures operating-system process resources. It does not independently identify slow Express routes, request latency, event-loop delays, or individual SQL queries.
-
-Monitoring SQL Server
-
-Example:
-
-cmd
-powershell -NoProfile -ExecutionPolicy Bypass -File .\stat.ps1 --port=1433 --interval=1 --out=sqlserver-stats.csv
-
-
-Confirm that SQL Server is actually listening on port 1433. Named instances and custom configurations may use other ports.
-
-Process-level metrics help identify CPU and memory consumption, but query-level performance analysis requires SQL Server diagnostic facilities such as Dynamic Management Views, Extended Events, or Query Store.
-
-Operational Considerations
-Process restarts and PID reuse
-
-Port-based discovery runs repeatedly and can discover a new PID after a restart. However, a robust production collector should associate samples with process start time as well as PID, reset CPU and I/O baselines when the process changes, and avoid treating a reused PID as the same process.
-
-Sampling overhead
-
-A one-second sampling interval is suitable for many monitoring scenarios, but the script invokes Windows management queries during collection. Monitor its own resource consumption when tracking many processes.
-
-CSV growth
-
-The script appends samples continuously, so the CSV file grows over time. For long-running deployments, consider log rotation, retention policies, or a time-series database.
-
-Permissions
-
-If a process cannot be queried, some metrics may be unavailable. Run the collector with appropriate permissions and review PowerShell errors when troubleshooting access issues.
-
-Data interpretation
-CPU and I/O rates require consecutive samples.
-A process that exits between discovery and sampling may be skipped.
-Process I/O is not equivalent to physical disk I/O.
-Port discovery covers TCP listening sockets, not UDP endpoints or every process associated with an application.
-Integration with win-mpstat
-
-This script can serve as a prototype or supplementary collector for win-mpstat.
-
-For production integration, consider implementing the collection loop directly in the existing agent using native Windows APIs:
-
-GetProcessTimes for cumulative process CPU time.
-GetProcessMemoryInfo for working-set and memory information.
-GetProcessIoCounters for process I/O transfer counters.
-Windows process APIs for threads and handles.
-TCP connection tables or Windows networking APIs for port-to-process discovery.
-
-Keep process metrics separate from system-wide and per-core CPU metrics so that dashboards can display both system utilization and individual application resource consumption.
-
-License
-
-Specify the license for your project here before distributing it.
-
-Contributing
-
-Contributions are welcome. Suggested improvements include:
-
-Process-tree tracking and worker aggregation.
-Process start-time detection and PID-reuse protection.
-Physical disk throughput and latency.
-Structured logging and configurable retention.
-Integration with a time-series database.
-Alerting for CPU, memory, and I/O thresholds.
+- [Chart.js](https://www.chartjs.org/) 4.4.7, (c) Chart.js Contributors, MIT licence. See `src/stat/web/vendor/LICENSE-chartjs.md`.
+- The [B612](https://github.com/polarsys/b612) typeface, (c) The B612 Project Authors, SIL Open Font License 1.1. See `src/stat/web/vendor/fonts/LICENSE-B612.txt`.
